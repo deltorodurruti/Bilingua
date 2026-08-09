@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bilingua — traductor de libros PDF</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --panel2:#1e242c; --line:#2a323c;
+    --tx:#e8edf2; --mut:#93a1b0; --acc:#5eb0ef; --acc2:#7ee0b8; --err:#ff8080;
+    --radius:14px; font-family:'Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(160deg,#0f1216,#12161c 60%,#0d1014);color:var(--tx);min-height:100vh}
+  .wrap{max-width:760px;margin:0 auto;padding:36px 22px 60px}
+  header{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+  header .logo{font-size:30px}
+  h1{font-size:22px;margin:0;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--mut);font-size:13.5px;margin:2px 0 26px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin-bottom:18px}
+  label{display:block;font-size:12.5px;color:var(--mut);margin:0 0 6px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+  input[type=text],input[type=password],select{
+    width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--tx);
+    border-radius:10px;padding:11px 13px;font-size:14px;outline:none}
+  input:focus,select:focus{border-color:var(--acc)}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:150px}
+  .drop{border:2px dashed var(--line);border-radius:12px;padding:26px;text-align:center;color:var(--mut);
+    cursor:pointer;transition:.15s;background:var(--panel2)}
+  .drop.hover{border-color:var(--acc);color:var(--tx);background:#20303c}
+  .drop b{color:var(--tx)}
+  .file{margin-top:10px;font-size:13.5px;color:var(--acc2)}
+  button{background:linear-gradient(180deg,#5eb0ef,#3f92d6);color:#06121e;border:0;border-radius:11px;
+    padding:13px 20px;font-size:15px;font-weight:700;cursor:pointer;width:100%;transition:.15s}
+  button:hover{filter:brightness(1.06)}
+  button:disabled{opacity:.5;cursor:default}
+  .hint{font-size:12px;color:var(--mut);margin-top:8px;line-height:1.5}
+  .hint a{color:var(--acc)}
+  .log{background:#0b0e12;border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:16px;
+    font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;color:var(--acc2);
+    height:230px;overflow-y:auto;white-space:pre-wrap;display:none}
+  .log .e{color:var(--err)}
+  .done{display:none;margin-top:16px}
+  .done a{display:inline-block;background:var(--acc2);color:#06231a;padding:12px 20px;border-radius:11px;
+    font-weight:700;text-decoration:none}
+  .seg{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .seg label{flex:1;margin:0;text-align:center;padding:11px;cursor:pointer;color:var(--mut);
+    text-transform:none;letter-spacing:0;font-weight:600;font-size:13.5px}
+  .seg input{display:none}
+  .seg input:checked+span{color:#06121e}
+  .seg label:has(input:checked){background:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><div class="logo">📖</div><h1>Bilingua</h1></header>
+  <div class="sub">Traductor de libros PDF — deja el original y la traducción lado a lado, o solo la traducción.</div>
+
+  <div class="card">
+    <label>Clave de DeepL</label>
+    <input type="password" id="key" placeholder="pega aquí tu clave (se guarda solo en este navegador)">
+    <div class="hint">¿No tienes? Crea una cuenta gratis en <a href="https://www.deepl.com/pro-api" target="_blank">deepl.com/pro-api</a> (500.000 caracteres/mes gratis). Copia la <b>Authentication Key</b> y pégala aquí.</div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:16px">
+      <div>
+        <label>Idioma del libro</label>
+        <select id="source">
+          <option value="">Detectar automáticamente</option>
+          <option value="EN">Inglés</option><option value="FR">Francés</option>
+          <option value="DE">Alemán</option><option value="IT">Italiano</option>
+          <option value="PT">Portugués</option><option value="ES">Español</option>
+        </select>
+      </div>
+      <div>
+        <label>Traducir a</label>
+        <select id="target">
+          <option value="ES" selected>Español</option><option value="EN-US">Inglés</option>
+          <option value="FR">Francés</option><option value="DE">Alemán</option>
+          <option value="IT">Italiano</option><option value="PT-BR">Portugués</option>
+        </select>
+      </div>
+    </div>
+    <label>Formato de salida</label>
+    <div class="seg">
+      <label><input type="radio" name="mode" value="bilingual" checked><span>Bilingüe (original + traducción)</span></label>
+      <label><input type="radio" name="mode" value="translation"><span>Solo traducción</span></label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="drop" id="drop">Arrastra aquí tu PDF, o <b>haz clic para elegirlo</b>
+      <input type="file" id="pdf" accept="application/pdf" style="display:none">
+      <div class="file" id="fname"></div>
+    </div>
+    <div style="margin-top:16px"><button id="go" disabled>Traducir</button></div>
+    <div class="hint">Funciona con PDFs que tengan texto. Si el PDF es un escaneo (solo imágenes), primero hay que pasarle OCR.</div>
+    <div class="log" id="log"></div>
+    <div class="done" id="done"><a id="dl" href="#">⬇ Descargar PDF traducido</a></div>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+$('key').value=localStorage.getItem('deepl_key')||'';
+$('key').addEventListener('input',e=>localStorage.setItem('deepl_key',e.target.value));
+let file=null;
+const drop=$('drop');
+drop.addEventListener('click',()=>$('pdf').click());
+$('pdf').addEventListener('change',e=>setFile(e.target.files[0]));
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hover')}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hover')}));
+drop.addEventListener('drop',e=>{if(e.dataTransfer.files[0])setFile(e.dataTransfer.files[0])});
+function setFile(f){file=f;$('fname').textContent=f?('📄 '+f.name):'';$('go').disabled=!f}
+function line(t,cls){const l=$('log');l.style.display='block';const d=document.createElement('div');if(cls)d.className=cls;d.textContent=t;l.appendChild(d);l.scrollTop=l.scrollHeight}
+$('go').addEventListener('click',async()=>{
+  if(!file)return;
+  if(!$('key').value.trim()){alert('Pega tu clave de DeepL primero.');return}
+  $('go').disabled=true;$('done').style.display='none';$('log').innerHTML='';
+  line('Enviando el PDF…');
+  const fd=new FormData();
+  fd.append('pdf',file);fd.append('key',$('key').value.trim());
+  fd.append('source',$('source').value);fd.append('target',$('target').value);
+  fd.append('mode',document.querySelector('input[name=mode]:checked').value);
+  let job;
+  try{const r=await fetch('/start',{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());job=(await r.json()).job}
+  catch(err){line('Error al iniciar: '+err.message,'e');$('go').disabled=false;return}
+  const es=new EventSource('/events?job='+job);
+  es.addEventListener('log',e=>line(e.data));
+  es.addEventListener('done',e=>{line('✓ Traducción terminada.');es.close();$('go').disabled=false;$('dl').href=e.data;$('done').style.display='block'});
+  es.addEventListener('error',e=>{if(e.data)line('Error: '+e.data,'e');es.close();$('go').disabled=false});
+});
+</script>
+</body>
+</html>

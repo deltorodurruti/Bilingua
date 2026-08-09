@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -23,7 +24,12 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 	if len(paras) == 0 || totalChars < 200 {
 		log("Este PDF parece escaneado (sin texto seleccionable). Lo traduzco con el OCR de DeepL, conservando el diseño…")
 		d := NewDeepL(key)
-		if err := d.TranslateDocument(inPath, outPath, source, target, log); err != nil {
+		// DeepL rechaza documentos >10 MB; los escaneos grandes se traducen por partes.
+		if fi, serr := os.Stat(inPath); serr == nil && fi.Size() > 9_500_000 {
+			if err := d.TranslateLargeScan(inPath, outPath, source, target, log); err != nil {
+				return fmt.Errorf("error traduciendo el escaneo grande: %w", err)
+			}
+		} else if err := d.TranslateDocument(inPath, outPath, source, target, log); err != nil {
 			return fmt.Errorf("error traduciendo el escaneo: %w", err)
 		}
 		log("✓ Listo (escaneo traducido con OCR): " + outPath)

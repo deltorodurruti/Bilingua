@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
 
 // docClient tolera subidas/descargas grandes (los timeouts de /translate son cortos).
@@ -55,6 +58,71 @@ func (d *DeepL) TranslateDocument(inPath, outPath, source, target string, log fu
 		time.Sleep(3 * time.Second)
 	}
 	return d.downloadDocument(id, dkey, outPath)
+}
+
+// TranslateLargeScan traduce un PDF escaneado que supera el límite de 10 MB del
+// endpoint de documentos de DeepL: lo divide en partes bajo el límite, traduce
+// cada una con TranslateDocument y une los resultados en outPath.
+// ponytail: reparte por nº de páginas iguales, asumiendo que en un escaneo todas
+// pesan parecido; si algún escaneo tuviera páginas muy dispares en tamaño habría
+// que repartir por bytes reales, no por conteo.
+func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log func(string)) error {
+	fi, err := os.Stat(inPath)
+	if err != nil {
+		return err
+	}
+	pages, err := api.PageCountFile(inPath)
+	if err != nil {
+		return fmt.Errorf("no se pudieron contar las páginas: %w", err)
+	}
+	if pages < 1 {
+		return fmt.Errorf("el PDF no tiene páginas")
+	}
+
+	parts := int(math.Ceil(float64(fi.Size()) / 9_000_000)) // margen bajo el límite de 10 MB
+	if parts > pages {
+		parts = pages
+	}
+	if parts < 1 {
+		parts = 1
+	}
+	span := int(math.Ceil(float64(pages) / float64(parts)))
+	// Recalcular partes desde el span para no generar rangos vacíos al final.
+	parts = int(math.Ceil(float64(pages) / float64(span)))
+
+	log(fmt.Sprintf("Escaneo grande (%d MB, %d páginas): lo divido en %d partes…",
+		fi.Size()/1_000_000, pages, parts))
+
+	tmp, err := os.MkdirTemp("", "bilingua-scan-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+
+	translated := make([]string, 0, parts)
+	for p := 0; p < parts; p++ {
+		start := p*span + 1
+		end := start + span - 1
+		if end > pages {
+			end = pages
+		}
+		partIn := filepath.Join(tmp, fmt.Sprintf("part-%02d.pdf", p))
+		if err := api.TrimFile(inPath, partIn, []string{fmt.Sprintf("%d-%d", start, end)}, nil); err != nil {
+			return fmt.Errorf("no se pudo dividir la parte %d: %w", p+1, err)
+		}
+		partOut := filepath.Join(tmp, fmt.Sprintf("part-%02d.out.pdf", p))
+		log(fmt.Sprintf("Traduciendo parte %d de %d (páginas %d–%d)…", p+1, parts, start, end))
+		if err := d.TranslateDocument(partIn, partOut, source, target, log); err != nil {
+			return fmt.Errorf("error traduciendo la parte %d: %w", p+1, err)
+		}
+		translated = append(translated, partOut)
+	}
+
+	log("Uniendo las partes traducidas…")
+	if err := api.MergeCreateFile(translated, outPath, false, nil); err != nil {
+		return fmt.Errorf("no se pudieron unir las partes traducidas: %w", err)
+	}
+	return nil
 }
 
 func (d *DeepL) uploadDocument(inPath, source, target string) (id, key string, err error) {

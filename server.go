@@ -48,7 +48,14 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/download", s.handleDownload)
 	mux.HandleFunc("/quit", s.handleQuit)
+	mux.HandleFunc("/config", s.handleConfig)
 	return mux
+}
+
+// handleConfig devuelve la clave de DeepL guardada en el equipo (si hay).
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"key": loadKey()})
 }
 
 // handleQuit lets the GUI shut the program down (no console window to close).
@@ -82,6 +89,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	key := r.FormValue("key")
+	saveKey(key) // recordar la clave para la próxima vez
 	source := r.FormValue("source")
 	target := r.FormValue("target")
 	if target == "" {

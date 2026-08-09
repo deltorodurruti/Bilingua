@@ -114,6 +114,8 @@
 const $=id=>document.getElementById(id);
 $('key').value=localStorage.getItem('deepl_key')||'';
 $('key').addEventListener('input',e=>localStorage.setItem('deepl_key',e.target.value));
+// la clave guardada en el equipo tiene prioridad (persiste aunque se borre el navegador)
+fetch('/config').then(r=>r.json()).then(c=>{if(c.key){$('key').value=c.key;localStorage.setItem('deepl_key',c.key)}}).catch(()=>{});
 let file=null;
 const drop=$('drop');
 drop.addEventListener('click',()=>$('pdf').click());

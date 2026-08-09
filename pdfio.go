@@ -69,26 +69,32 @@ func splitParagraphs(text string) []string {
 // mode: "bilingual" = original + translation per paragraph; "translation" = only translation.
 func WritePDF(outPath, title, mode string, originals, translations []string) error {
 	pdfDoc := fpdf.New("P", "mm", "A4", "")
-	pdfDoc.SetMargins(18, 18, 18)
-	pdfDoc.SetAutoPageBreak(true, 18)
-	tr := pdfDoc.UnicodeTranslatorFromDescriptor("") // UTF-8 -> latin-1 (covers Spanish)
+	pdfDoc.SetMargins(20, 20, 20)
+	pdfDoc.SetAutoPageBreak(true, 20)
+	// Fuente Unicode incrustada (Noto Sans): se pasan las cadenas UTF-8 tal cual,
+	// sin convertir a latin-1, así los acentos, comillas curvas, guiones largos,
+	// diacríticos y griego se ven bien en vez de "letras raras".
+	pdfDoc.AddUTF8FontFromBytes("Noto", "", notoRegular)
+	pdfDoc.AddUTF8FontFromBytes("Noto", "B", notoBold)
+	pdfDoc.AddUTF8FontFromBytes("Noto", "I", notoItalic)
 	pdfDoc.AddPage()
 
-	pdfDoc.SetFont("Helvetica", "B", 16)
-	pdfDoc.MultiCell(0, 8, tr(title), "", "L", false)
-	pdfDoc.Ln(4)
+	pdfDoc.SetFont("Noto", "B", 17)
+	pdfDoc.SetTextColor(20, 20, 25)
+	pdfDoc.MultiCell(0, 9, title, "", "L", false)
+	pdfDoc.Ln(7)
 
 	for i := range translations {
 		if mode == "bilingual" && i < len(originals) {
-			pdfDoc.SetFont("Helvetica", "I", 9)
-			pdfDoc.SetTextColor(120, 120, 120)
-			pdfDoc.MultiCell(0, 4.5, tr(originals[i]), "", "L", false)
-			pdfDoc.Ln(1)
+			pdfDoc.SetFont("Noto", "I", 9.5)
+			pdfDoc.SetTextColor(140, 140, 148)
+			pdfDoc.MultiCell(0, 5.4, originals[i], "", "L", false)
+			pdfDoc.Ln(1.8)
 		}
-		pdfDoc.SetFont("Helvetica", "", 11)
-		pdfDoc.SetTextColor(20, 20, 20)
-		pdfDoc.MultiCell(0, 5.5, tr(translations[i]), "", "L", false)
-		pdfDoc.Ln(3)
+		pdfDoc.SetFont("Noto", "", 11.5)
+		pdfDoc.SetTextColor(24, 24, 28)
+		pdfDoc.MultiCell(0, 6.4, translations[i], "", "L", false)
+		pdfDoc.Ln(5)
 	}
 	if err := pdfDoc.OutputFileAndClose(outPath); err != nil {
 		return fmt.Errorf("no se pudo escribir el PDF: %w", err)

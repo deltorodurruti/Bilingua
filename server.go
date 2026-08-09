@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Job struct {
@@ -46,7 +47,17 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/download", s.handleDownload)
+	mux.HandleFunc("/quit", s.handleQuit)
 	return mux
+}
+
+// handleQuit lets the GUI shut the program down (no console window to close).
+func (s *Server) handleQuit(w http.ResponseWriter, r *http.Request) {
+	_, _ = w.Write([]byte("ok"))
+	if fl, ok := w.(http.Flusher); ok {
+		fl.Flush()
+	}
+	go func() { time.Sleep(300 * time.Millisecond); os.Exit(0) }()
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

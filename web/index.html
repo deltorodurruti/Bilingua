@@ -99,6 +99,10 @@
     <div class="log" id="log"></div>
     <div class="done" id="done"><a id="dl" href="#">⬇ Descargar PDF traducido</a></div>
   </div>
+
+  <div style="text-align:center;margin-top:6px">
+    <a href="#" id="quit" style="color:var(--mut);font-size:12.5px;text-decoration:none">⏻ Salir del programa</a>
+  </div>
 </div>
 <script>
 const $=id=>document.getElementById(id);
@@ -129,6 +133,11 @@ $('go').addEventListener('click',async()=>{
   es.addEventListener('log',e=>line(e.data));
   es.addEventListener('done',e=>{line('✓ Traducción terminada.');es.close();$('go').disabled=false;$('dl').href=e.data;$('done').style.display='block'});
   es.addEventListener('error',e=>{if(e.data)line('Error: '+e.data,'e');es.close();$('go').disabled=false});
+});
+$('quit').addEventListener('click',async e=>{
+  e.preventDefault();
+  try{await fetch('/quit')}catch(_){}
+  document.body.innerHTML='<div style="max-width:760px;margin:0 auto;padding:60px 22px;text-align:center;color:#93a1b0;font-family:sans-serif">Bilingua se cerró. Ya puedes cerrar esta pestaña.</div>';
 });
 </script>
 </body>

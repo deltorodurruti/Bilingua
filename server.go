@@ -49,7 +49,14 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/download", s.handleDownload)
 	mux.HandleFunc("/quit", s.handleQuit)
 	mux.HandleFunc("/config", s.handleConfig)
+	mux.HandleFunc("/savekey", s.handleSaveKey)
 	return mux
+}
+
+// handleSaveKey persiste la clave apenas se ingresa (sin esperar a traducir).
+func (s *Server) handleSaveKey(w http.ResponseWriter, r *http.Request) {
+	saveKey(r.URL.Query().Get("key"))
+	_, _ = w.Write([]byte("ok"))
 }
 
 // handleConfig devuelve la clave de DeepL guardada en el equipo (si hay).

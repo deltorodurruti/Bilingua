@@ -113,7 +113,12 @@
 <script>
 const $=id=>document.getElementById(id);
 $('key').value=localStorage.getItem('deepl_key')||'';
-$('key').addEventListener('input',e=>localStorage.setItem('deepl_key',e.target.value));
+let _keyT;
+$('key').addEventListener('input',e=>{
+  localStorage.setItem('deepl_key',e.target.value);
+  clearTimeout(_keyT);
+  _keyT=setTimeout(()=>fetch('/savekey?key='+encodeURIComponent(e.target.value.trim())).catch(()=>{}),500);
+});
 // la clave guardada en el equipo tiene prioridad (persiste aunque se borre el navegador)
 fetch('/config').then(r=>r.json()).then(c=>{if(c.key){$('key').value=c.key;localStorage.setItem('deepl_key',c.key)}}).catch(()=>{});
 let file=null;

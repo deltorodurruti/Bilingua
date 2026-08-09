@@ -50,7 +50,11 @@ func main() {
 	addr := fmt.Sprintf("127.0.0.1:%d", *port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("No se pudo abrir el puerto %d: %v", *port, err)
+		// El puerto ya está en uso: casi siempre es otra instancia de Bilingua
+		// que quedó abierta. Sin consola (windowsgui) morir aquí se vería como
+		// "no abre"; en su lugar, abrimos el navegador en la instancia que ya corre.
+		openBrowser("http://" + addr)
+		return
 	}
 	url := "http://" + addr
 	fmt.Println("╔══════════════════════════════════════════╗")

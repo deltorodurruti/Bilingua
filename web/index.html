@@ -49,6 +49,10 @@
   .seg input{display:none}
   .seg input:checked+span{color:#06121e}
   .seg label:has(input:checked){background:var(--acc)}
+  .stepbar{font-size:11px;color:var(--acc);font-weight:800;text-transform:uppercase;
+    letter-spacing:.7px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  .stepbar b{background:var(--acc);color:#06121e;border-radius:50%;width:20px;height:20px;
+    display:inline-flex;align-items:center;justify-content:center;font-size:12px}
 </style>
 </head>
 <body>
@@ -57,12 +61,13 @@
   <div class="sub">Traductor de libros PDF — deja el original y la traducción lado a lado, o solo la traducción.</div>
 
   <div class="card">
-    <label>Clave de DeepL</label>
+    <div class="stepbar"><b>1</b> Pega tu clave de DeepL</div>
     <input type="password" id="key" placeholder="pega aquí tu clave (se guarda solo en este navegador)">
     <div class="hint">¿No tienes? Crea una cuenta gratis en <a href="https://www.deepl.com/pro-api" target="_blank">deepl.com/pro-api</a> (500.000 caracteres/mes gratis). Copia la <b>Authentication Key</b> y pégala aquí.</div>
   </div>
 
   <div class="card">
+    <div class="stepbar"><b>2</b> Elige los idiomas y el formato</div>
     <div class="row" style="margin-bottom:16px">
       <div>
         <label>Idioma del libro</label>
@@ -90,12 +95,13 @@
   </div>
 
   <div class="card">
+    <div class="stepbar"><b>3</b> Sube tu PDF y traduce</div>
     <div class="drop" id="drop">Arrastra aquí tu PDF, o <b>haz clic para elegirlo</b>
       <input type="file" id="pdf" accept="application/pdf" style="display:none">
       <div class="file" id="fname"></div>
     </div>
     <div style="margin-top:16px"><button id="go" disabled>Traducir</button></div>
-    <div class="hint">Funciona con PDFs que tengan texto. Si el PDF es un escaneo (solo imágenes), primero hay que pasarle OCR.</div>
+    <div class="hint">Funciona con cualquier PDF: si tiene texto, obtienes original + traducción; si es un <b>escaneo</b> (fotos de páginas), DeepL lo lee con OCR y lo traduce igual.</div>
     <div class="log" id="log"></div>
     <div class="done" id="done"><a id="dl" href="#">⬇ Descargar PDF traducido</a></div>
   </div>

@@ -15,13 +15,19 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		return err
 	}
 
-	// guard against image-only (scanned) PDFs
+	// PDF escaneado (sin texto): lo traduce DeepL con su OCR, preservando el diseño.
 	var totalChars int
 	for _, p := range paras {
 		totalChars += len(p)
 	}
 	if len(paras) == 0 || totalChars < 200 {
-		return fmt.Errorf("este PDF no tiene texto legible (parece escaneado). Hay que pasarle OCR antes de traducir")
+		log("Este PDF parece escaneado (sin texto seleccionable). Lo traduzco con el OCR de DeepL, conservando el diseño…")
+		d := NewDeepL(key)
+		if err := d.TranslateDocument(inPath, outPath, source, target, log); err != nil {
+			return fmt.Errorf("error traduciendo el escaneo: %w", err)
+		}
+		log("✓ Listo (escaneo traducido con OCR): " + outPath)
+		return nil
 	}
 	log(fmt.Sprintf("Texto extraído: %d párrafos, ~%d caracteres.", len(paras), totalChars))
 

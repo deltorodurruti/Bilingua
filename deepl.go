@@ -36,27 +36,27 @@ type deeplResp struct {
 	Message string `json:"message"`
 }
 
-// Translate a batch of text segments (max 50 per DeepL request).
-// source may be "" for auto-detect. target e.g. "ES", "EN".
+// Translate a batch of text segments. Uses the JSON API (compact, no URL-encode
+// inflation). source may be "" for auto-detect. target e.g. "ES", "EN".
 func (d *DeepL) Translate(segments []string, source, target string) ([]string, error) {
 	if d.key == "" {
 		return nil, fmt.Errorf("falta la clave de DeepL")
 	}
-	form := url.Values{}
-	form.Set("auth_key", d.key)
-	form.Set("target_lang", strings.ToUpper(target))
+	payload := map[string]any{
+		"text":                segments,
+		"target_lang":         strings.ToUpper(target),
+		"preserve_formatting": true,
+	}
 	if source != "" && strings.ToUpper(source) != "AUTO" {
-		form.Set("source_lang", strings.ToUpper(source))
+		payload["source_lang"] = strings.ToUpper(source)
 	}
-	form.Set("preserve_formatting", "1")
-	for _, s := range segments {
-		form.Add("text", s)
-	}
+	body, _ := json.Marshal(payload)
 
 	var lastErr error
 	for attempt := 0; attempt < 4; attempt++ {
-		req, _ := http.NewRequest("POST", d.endpoint(), bytes.NewBufferString(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req, _ := http.NewRequest("POST", d.endpoint(), bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "DeepL-Auth-Key "+d.key)
 		resp, err := d.client.Do(req)
 		if err != nil {
 			lastErr = err

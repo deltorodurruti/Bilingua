@@ -33,12 +33,21 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		}
 	}
 
-	const batchSize = 40
+	// Group paragraphs into requests that stay under DeepL's limits:
+	// at most 45 text params and ~90 KB of payload per request.
+	const maxParams = 45
+	const maxBytes = 60000
 	translations := make([]string, 0, len(paras))
-	for i := 0; i < len(paras); i += batchSize {
-		end := i + batchSize
-		if end > len(paras) {
-			end = len(paras)
+	i := 0
+	for i < len(paras) {
+		end := i
+		bytes := 0
+		for end < len(paras) && (end-i) < maxParams && bytes+len(paras[end]) < maxBytes {
+			bytes += len(paras[end])
+			end++
+		}
+		if end == i { // a single oversized paragraph — send it alone
+			end = i + 1
 		}
 		log(fmt.Sprintf("Traduciendo párrafos %d–%d de %d…", i+1, end, len(paras)))
 		out, err := d.Translate(paras[i:end], source, target)
@@ -46,6 +55,7 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 			return fmt.Errorf("error traduciendo: %w", err)
 		}
 		translations = append(translations, out...)
+		i = end
 	}
 
 	title := strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))

@@ -1,3 +1,15 @@
 dist/
 /tmp/
 *.pdf
+
+# compiled binary
+/bilingua
+/bilingua.exe
+
+# never commit: keys, local settings, macOS clutter
+*_key.txt
+*.key
+.env
+.DS_Store
+.idea/
+.vscode/

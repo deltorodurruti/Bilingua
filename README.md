@@ -1,37 +1,146 @@
 # 📖 Bilingua
 
-Traductor de libros en **PDF** (inglés → español y otros idiomas). Deja el original y la traducción **lado a lado**, o solo la traducción. Funciona también con **PDFs escaneados** (los lee con OCR). No se instala: es un solo archivo que se abre en tu navegador.
+Traductor de libros en **PDF** (inglés → español y otros idiomas). Deja **solo la traducción** o el original y la traducción juntos. Funciona también con **PDFs escaneados** (los lee con OCR) y **copia las figuras** del original junto a su leyenda.
+
+Un solo archivo, sin instalar nada: se abre en tu navegador o se usa desde la terminal.
+
+---
 
 ## ⬇ Descargar
 
-### 👉 [Descargar para Windows](https://github.com/deltorodurruti/Bilingua/releases/latest/download/Bilingua-Windows.zip)
+### Windows
+👉 **[Descargar Bilingua para Windows](https://github.com/deltorodurruti/Bilingua/releases/latest)**
 
 Descomprime el ZIP (clic derecho → **Extraer todo**) y haz doble clic en `Bilingua.exe`.
-Dentro viene una **guía con imágenes** paso a paso.
 
-![La pantalla de Bilingua](docs/pantalla.png)
+### Mac
+👉 **[Descargar Bilingua para Mac](https://github.com/deltorodurruti/Bilingua/releases/latest)** (`Bilingua-mac`, sirve para Intel y Apple Silicon)
 
-## Cómo usar (3 pasos)
-
-1. **Doble clic en `Bilingua.exe`.** La primera vez, Windows muestra un aviso azul ("Windows protegió su PC") → haz clic en **"Más información"** → **"Ejecutar de todas formas"**. Es normal y no es un virus: aparece con cualquier programa nuevo que no viene de la tienda.
-2. Se abre **tu navegador** con el programa (no hay ventana negra).
-3. **Pega tu clave de DeepL**, elige los idiomas, **arrastra tu PDF** y pulsa **Traducir**. Al terminar, descarga el PDF traducido.
-
-La clave se **guarda en tu equipo**: la pegas una sola vez y el programa la recuerda para siempre.
-
-## Necesitas una clave de DeepL (gratis)
-
-Crea una cuenta gratuita en **[deepl.com/pro-api](https://www.deepl.com/pro-api)** (500.000 caracteres al mes sin costo). Copia tu *Authentication Key* y pégala en el programa la primera vez.
-
-## Para desarrolladores
-
-Un solo binario en Go, sin dependencias nativas. Compilar para las tres plataformas:
+La primera vez, macOS bloquea los programas descargados de internet. Para desbloquearlo, abre la app **Terminal** y pega esto:
 
 ```bash
-./build.sh    # genera dist/Bilingua.exe, Bilingua-mac y Bilingua-linux
+cd ~/Downloads
+xattr -d com.apple.quarantine Bilingua-mac
+chmod +x Bilingua-mac
 ```
 
-Motor de traducción: [DeepL API](https://www.deepl.com/pro-api). Interfaz web local servida en `127.0.0.1` (nada sale de tu equipo salvo el texto que se envía a DeepL para traducir).
+Luego ya puedes usarlo (ver abajo).
+
+---
+
+## 🖱 Uso con ventana (lo más simple)
+
+Doble clic en el programa, o desde la terminal:
+
+```bash
+./Bilingua-mac
+```
+
+Se abre tu navegador con la interfaz. Pega tu clave de DeepL la primera vez, arrastra el PDF y pulsa **Traducir**. Al terminar, descarga el PDF traducido.
+
+---
+
+## ⌨️ Uso en la terminal (Mac)
+
+```bash
+./Bilingua-mac --in libro.pdf
+```
+
+Deja el resultado al lado del original, como `libro (traducido).pdf`.
+
+**La primera vez** pasa tu clave; queda guardada y no hay que repetirla:
+
+```bash
+./Bilingua-mac --key TU_CLAVE_DEEPL --in libro.pdf
+```
+
+### Ejemplos
+
+```bash
+# ver el avance paso a paso (útil en libros largos)
+./Bilingua-mac --in libro.pdf --verbose
+
+# original y traducción juntos
+./Bilingua-mac --in libro.pdf --mode bilingual
+
+# elegir dónde guardar
+./Bilingua-mac --in libro.pdf --out ~/Desktop/traducido.pdf
+
+# traducir a otro idioma
+./Bilingua-mac --in libro.pdf --target EN-US
+
+# ver todas las opciones
+./Bilingua-mac --help
+```
+
+### Opciones
+
+| Opción | Para qué sirve |
+|---|---|
+| `--in` | el PDF a traducir |
+| `--out` | dónde guardar (por defecto, junto al original) |
+| `--mode` | `translation` (solo traducción, por defecto) · `bilingual` (con el original) |
+| `--target` | idioma de destino: `ES`, `EN-US`, `EN-GB`, `FR`, `DE`, `IT`, `PT-BR`… |
+| `--source` | idioma de origen; si lo omites, se detecta solo |
+| `--verbose` | muestra cada paso con la hora y los segundos transcurridos |
+| `--quiet` | no muestra nada salvo errores |
+| `--key` | tu clave de DeepL (solo la primera vez) |
+| `--port` | puerto de la interfaz web (por defecto 8799) |
+
+**Consejo:** para no escribir `./Bilingua-mac` cada vez, muévelo a una carpeta del sistema y llámalo por su nombre:
+
+```bash
+sudo mv ~/Downloads/Bilingua-mac /usr/local/bin/bilingua
+bilingua --in libro.pdf
+```
+
+---
+
+## 🔑 La clave de DeepL
+
+Necesitas una clave gratuita: créala en **[deepl.com/pro-api](https://www.deepl.com/pro-api)** (500.000 caracteres al mes sin costo) y copia tu *Authentication Key*.
+
+Se guarda **en tu equipo** (`~/Library/Application Support/Bilingua/` en Mac) y no se vuelve a pedir. Nunca se muestra en pantalla ni sale del computador salvo hacia DeepL.
+
+---
+
+## 📄 Libros grandes y escaneados
+
+DeepL limita el tamaño de cada documento que se le envía: **10 MB** con la cuenta gratuita y **100 MB** con la de pago. Bilingua se encarga solo:
+
+- Si el PDF **cabe**, lo manda entero.
+- Si **no cabe**, lo divide en las **menos partes posibles**, traduce cada una y las **vuelve a unir** en un solo PDF. Mide cada parte de verdad antes de enviarla, así que una lámina pesada no rompe el proceso a mitad de camino.
+- Si una parte falla, **las ya traducidas se conservan**: vuelve a ejecutar el mismo comando y se reutilizan en vez de gastar cuota otra vez.
+- Al final comprueba que el PDF unido tenga **todas las páginas** del original.
+
+> ⚠️ **Ojo con la cuota:** DeepL cobra un **mínimo de 50.000 caracteres por cada documento** enviado. Un libro dividido en 7 partes consume al menos 350.000 caracteres de tu cuota mensual, aunque tenga poco texto. Bilingua te avisa cuántas partes hará y cuánto costará antes de empezar.
+
+Los libros **híbridos** (mayoría de páginas escaneadas y unas pocas con texto) se detectan y se mandan enteros al OCR, para que no se pierda ninguna página.
+
+---
+
+## 🛠 Para desarrolladores
+
+Go 1.26+, sin dependencias nativas.
+
+```bash
+git clone https://github.com/deltorodurruti/Bilingua.git
+cd Bilingua
+go build .          # genera ./bilingua
+go test ./...       # pruebas
+./build.sh          # binarios para Windows, Mac (universal) y Linux en dist/
+```
+
+`build.sh` produce:
+
+| Archivo | Para |
+|---|---|
+| `Bilingua.exe` | Windows, doble clic (sin ventana negra) |
+| `bilingua-cli.exe` | Windows, terminal |
+| `Bilingua-mac` | Mac universal (Intel + Apple Silicon) |
+| `Bilingua-linux` | Linux |
+
+Motor de traducción: [DeepL API](https://www.deepl.com/pro-api). La interfaz web se sirve en `127.0.0.1`: nada sale de tu equipo salvo el texto que se envía a DeepL para traducir.
 
 ## Licencia
 MIT.

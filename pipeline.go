@@ -64,6 +64,7 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 			log("Este PDF parece escaneado (sin texto seleccionable). Lo traduzco con el OCR de DeepL, conservando el diseño…")
 		}
 		d := NewDeepL(key)
+		d.log = log
 		if fi, serr := os.Stat(inPath); serr == nil && fi.Size() > DocSizeLimit(key) {
 			if err := d.TranslateLargeScan(inPath, outPath, source, target, log); err != nil {
 				return fmt.Errorf("error traduciendo el escaneo grande: %w", err)
@@ -77,8 +78,13 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 	log(fmt.Sprintf("Texto extraído: %d párrafos, ~%d caracteres.", len(paras), totalChars))
 
 	d := NewDeepL(key)
+	d.log = log
 	if used, limit, uerr := d.Usage(); uerr == nil && limit > 0 {
-		log(fmt.Sprintf("Cuenta DeepL: %d/%d caracteres usados este mes.", used, limit))
+		if n := d.keyCount(); n > 1 {
+			log(fmt.Sprintf("Cuenta DeepL (%d claves sumadas): %d/%d caracteres usados este mes.", n, used, limit))
+		} else {
+			log(fmt.Sprintf("Cuenta DeepL: %d/%d caracteres usados este mes.", used, limit))
+		}
 		if int64(totalChars) > (limit - used) {
 			// Starting anyway would spend what is left and still fail partway.
 			return fmt.Errorf("este libro necesita ~%d caracteres y en tu cuota mensual quedan %d.\n"+

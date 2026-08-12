@@ -28,7 +28,7 @@ func main() {
 	out := flag.String("out", "", "PDF de salida (por defecto: <entrada> (traducido).pdf)")
 	// Default stays empty on purpose: flag prints defaults, so reading the env
 	// var here would leak the key in --help.
-	key := flag.String("key", "", "clave de DeepL (solo la primera vez: queda guardada en el equipo)")
+	key := flag.String("key", "", "clave de DeepL; se guarda. Repite el flag o sepáralas con comas para tener varias")
 	source := flag.String("source", "", "idioma de origen; vacío = detectar solo. Ej: EN")
 	target := flag.String("target", "ES", "idioma de destino. Ej: ES")
 	mode := flag.String("mode", "translation", "translation = solo la traducción · bilingual = original y traducción")
@@ -38,15 +38,16 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	// Precedence: --key, then env var, then the key stored on this machine.
-	if *key == "" {
-		*key = strings.TrimSpace(os.Getenv("BILINGUA_DEEPL_KEY"))
+	// A key given on the command line is added to the stored list rather than
+	// replacing it, so a second account can take over when the first runs out.
+	// Precedence: --key and the env var are added; whatever is stored is used.
+	if k := strings.TrimSpace(*key); k != "" {
+		addKeys(splitKeys(k))
 	}
-	if *key == "" {
-		*key = loadKey()
-	} else {
-		saveKey(*key)
+	if k := strings.TrimSpace(os.Getenv("BILINGUA_DEEPL_KEY")); k != "" {
+		addKeys(splitKeys(k))
 	}
+	*key = strings.Join(loadKeys(), "\n")
 
 	// --in alone implies terminal mode.
 	if *cli || *in != "" {
@@ -94,7 +95,12 @@ func main() {
 				fmt.Println("· " + s)
 			}
 		}
-		logf(fmt.Sprintf("Bilingua — %s → %s, %s", orAuto(*source), strings.ToUpper(*target), modeName(*mode)))
+		if n := len(loadKeys()); n > 1 {
+			logf(fmt.Sprintf("Bilingua — %s → %s, %s · %d claves (si una se agota, sigue con la siguiente)",
+				orAuto(*source), strings.ToUpper(*target), modeName(*mode), n))
+		} else {
+			logf(fmt.Sprintf("Bilingua — %s → %s, %s", orAuto(*source), strings.ToUpper(*target), modeName(*mode)))
+		}
 		if err := TranslateBook(*in, o, *key, *source, *target, *mode, logf); err != nil {
 			fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 			os.Exit(1)
@@ -154,10 +160,13 @@ Ejemplos
 Idiomas    ES · EN-US · EN-GB · FR · DE · IT · PT-BR · PT-PT · NL · PL · JA · ZH…
            (--source vacío = detectar solo)
 
-Clave      Se pide una sola vez con --key y queda guardada en este equipo.
-           Alternativa sin dejar rastro en el historial del shell:
-             export BILINGUA_DEEPL_KEY="tu-clave:fx"
-           Gratis (500.000 caracteres/mes) en https://www.deepl.com/pro-api
+Claves     Se piden una sola vez con --key y quedan guardadas en este equipo.
+           Puedes tener VARIAS: cuando una agota su cuota mensual, sigue con la
+           siguiente sin perder lo ya traducido.
+             bilingua --key PRIMERA:fx --in libro.pdf     (guarda la primera)
+             bilingua --key SEGUNDA:fx --in libro.pdf     (añade la segunda)
+           Se guardan en el archivo de abajo, una por línea; puedes editarlo.
+           Gratis (500.000 caracteres/mes cada una) en https://www.deepl.com/pro-api
 
 Opciones
 `)

@@ -31,16 +31,20 @@ const (
 // Uploads and downloads are slow; /translate timeouts are not enough.
 var docClient = &http.Client{Timeout: 10 * time.Minute}
 
-// DocSizeLimit returns the upload limit that applies to this key.
-func DocSizeLimit(key string) int64 {
-	if strings.HasSuffix(strings.TrimSpace(key), ":fx") {
-		return freeDocLimit
+// DocSizeLimit returns the upload limit that applies. With several keys it is
+// the smallest one, so the parts fit whichever key ends up being used.
+func DocSizeLimit(keys string) int64 {
+	limit := int64(proDocLimit)
+	for _, k := range splitKeys(keys) {
+		if strings.HasSuffix(k, ":fx") {
+			limit = freeDocLimit
+		}
 	}
-	return proDocLimit
+	return limit
 }
 
-func (d *DeepL) docEndpoint() string {
-	if strings.HasSuffix(d.key, ":fx") {
+func docEndpointFor(key string) string {
+	if strings.HasSuffix(key, ":fx") {
 		return "https://api-free.deepl.com/v2/document"
 	}
 	return "https://api.deepl.com/v2/document"
@@ -49,10 +53,12 @@ func (d *DeepL) docEndpoint() string {
 // TranslateDocument uploads a file, waits for DeepL to translate it (OCR included
 // for scanned PDFs, original layout preserved) and writes the result to outPath.
 func (d *DeepL) TranslateDocument(inPath, outPath, source, target string, log func(string)) error {
-	if d.key == "" {
+	if d.key() == "" {
 		return fmt.Errorf("falta la clave de DeepL")
 	}
-	id, dkey, err := d.uploadDocument(inPath, source, target)
+	// The document id belongs to the key that uploaded it, so status and
+	// download must keep using that same key even if others are configured.
+	id, dkey, authKey, err := d.uploadDocument(inPath, source, target)
 	if err != nil {
 		return err
 	}
@@ -63,7 +69,7 @@ func (d *DeepL) TranslateDocument(inPath, outPath, source, target string, log fu
 		if time.Now().After(deadline) {
 			return fmt.Errorf("DeepL lleva más de %s sin terminar este documento; lo doy por fallido", docTimeout)
 		}
-		status, secs, msg, err := d.documentStatus(id, dkey)
+		status, secs, msg, err := d.documentStatus(id, dkey, authKey)
 		if err != nil {
 			// The document is already paid for; a blip in the network must not
 			// throw it away. Only give up after several failures in a row.
@@ -77,7 +83,7 @@ func (d *DeepL) TranslateDocument(inPath, outPath, source, target string, log fu
 		softFails = 0
 		switch status {
 		case "done":
-			return d.downloadDocument(id, dkey, outPath)
+			return d.downloadDocument(id, dkey, authKey, outPath)
 		case "error":
 			if msg == "" {
 				msg = "¿escaneo ilegible o formato no soportado?"
@@ -188,7 +194,7 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 	if pages < 1 {
 		return fmt.Errorf("el PDF no tiene páginas")
 	}
-	limit := DocSizeLimit(d.key)
+	limit := DocSizeLimit(strings.Join(d.keys, "\n"))
 
 	// The work dir is keyed to this exact job. Without the manifest a second
 	// book sharing --out, or the same book with a different target language,
@@ -287,7 +293,17 @@ func thousands(n int64) string {
 	return b.String()
 }
 
-func (d *DeepL) uploadDocument(inPath, source, target string) (id, key string, err error) {
+func (d *DeepL) uploadDocument(inPath, source, target string) (id, key, authKey string, err error) {
+	for {
+		id, key, err = d.uploadOnce(inPath, source, target)
+		if err != nil && strings.Contains(err.Error(), "456") && d.nextKey("agotó su cuota mensual") {
+			continue
+		}
+		return id, key, d.key(), err
+	}
+}
+
+func (d *DeepL) uploadOnce(inPath, source, target string) (id, key string, err error) {
 	f, err := os.Open(inPath)
 	if err != nil {
 		return "", "", err
@@ -309,8 +325,8 @@ func (d *DeepL) uploadDocument(inPath, source, target string) (id, key string, e
 	}
 	mw.Close()
 
-	req, _ := http.NewRequest("POST", d.docEndpoint(), &buf)
-	req.Header.Set("Authorization", "DeepL-Auth-Key "+d.key)
+	req, _ := http.NewRequest("POST", docEndpointFor(d.key()), &buf)
+	req.Header.Set("Authorization", "DeepL-Auth-Key "+d.key())
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := docClient.Do(req)
 	if err != nil {
@@ -336,10 +352,10 @@ func (d *DeepL) uploadDocument(inPath, source, target string) (id, key string, e
 	return r.DocumentID, r.DocumentKey, nil
 }
 
-func (d *DeepL) documentStatus(id, key string) (status string, secs int, msg string, err error) {
+func (d *DeepL) documentStatus(id, key, authKey string) (status string, secs int, msg string, err error) {
 	body, _ := json.Marshal(map[string]string{"document_key": key})
-	req, _ := http.NewRequest("POST", d.docEndpoint()+"/"+id, bytes.NewReader(body))
-	req.Header.Set("Authorization", "DeepL-Auth-Key "+d.key)
+	req, _ := http.NewRequest("POST", docEndpointFor(authKey)+"/"+id, bytes.NewReader(body))
+	req.Header.Set("Authorization", "DeepL-Auth-Key "+authKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := docClient.Do(req)
 	if err != nil {
@@ -362,10 +378,10 @@ func (d *DeepL) documentStatus(id, key string) (status string, secs int, msg str
 	return r.Status, r.SecondsRemaining, r.ErrorMessage, nil
 }
 
-func (d *DeepL) downloadDocument(id, key, outPath string) error {
+func (d *DeepL) downloadDocument(id, key, authKey, outPath string) error {
 	body, _ := json.Marshal(map[string]string{"document_key": key})
-	req, _ := http.NewRequest("POST", d.docEndpoint()+"/"+id+"/result", bytes.NewReader(body))
-	req.Header.Set("Authorization", "DeepL-Auth-Key "+d.key)
+	req, _ := http.NewRequest("POST", docEndpointFor(authKey)+"/"+id+"/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "DeepL-Auth-Key "+authKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := docClient.Do(req)
 	if err != nil {

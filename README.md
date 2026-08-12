@@ -101,7 +101,22 @@ bilingua --in libro.pdf
 
 ## 🔑 La clave de DeepL
 
-Necesitas una clave gratuita: créala en **[deepl.com/pro-api](https://www.deepl.com/pro-api)** (500.000 caracteres al mes sin costo) y copia tu *Authentication Key*.
+### Conseguirla (gratis, una vez)
+
+1. Entra a **[deepl.com/pro-api](https://www.deepl.com/pro-api)** y pulsa **Sign up for free** → elige el plan **DeepL API Free** (500.000 caracteres al mes, sin costo).
+2. Crea la cuenta con tu correo. **Te pedirá una tarjeta para verificar tu identidad; en el plan Free no se cobra nada** (solo si algún día pasas a Pro).
+3. Confirma el correo e inicia sesión.
+4. Ve a **[deepl.com/your-account/keys](https://www.deepl.com/en/your-account/keys)** (o arriba a la derecha: tu cuenta → pestaña **API keys**).
+5. Copia la clave. Es una línea larga que **termina en `:fx`**, así:
+   `1a2b3c4d-5e6f-7890-abcd-ef1234567890:fx`
+
+### Guardarla
+
+```bash
+bilingua --key 1a2b3c4d-5e6f-7890-abcd-ef1234567890:fx --in libro.pdf
+```
+
+Con eso queda guardada y **no la vuelves a escribir nunca**.
 
 Se guarda **en tu equipo** (`~/Library/Application Support/Bilingua/deepl_key.txt` en Mac, con permisos que solo te dejan leerla a ti) y no se vuelve a pedir. Nunca se muestra en pantalla ni sale del computador salvo hacia DeepL.
 
@@ -111,6 +126,17 @@ Si prefieres que **no quede en el historial de la terminal**, usa la variable de
 export BILINGUA_DEEPL_KEY="tu-clave:fx"
 bilingua --in libro.pdf
 ```
+
+### Varias claves (más cuota)
+
+Cada cuenta gratuita da 500.000 caracteres al mes. Puedes tener **varias claves**: cuando una se agota, Bilingua **sigue con la siguiente sin perder lo ya traducido**.
+
+```bash
+bilingua --key PRIMERA:fx --in libro.pdf    # guarda la primera
+bilingua --key SEGUNDA:fx --in libro.pdf    # AÑADE la segunda (no la reemplaza)
+```
+
+Se guardan una por línea en `~/Library/Application Support/Bilingua/deepl_key.txt`; puedes abrir ese archivo y editarlo o borrar la que ya no sirva. Al empezar, el programa te dice cuánta cuota te queda **sumando todas**.
 
 ---
 

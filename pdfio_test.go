@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// Verifica que la salida usa la fuente Unicode y no rompe con caracteres que
-// antes salían como "letras raras".
+// The output must use the Unicode font and survive characters that used to
+// come out as garbage.
 func TestWritePDFUnicode(t *testing.T) {
 	orig := []string{`He said "hello" — and left… a naïve café.`}
 	trans := []string{`Dijo «hola» —y se fue…: café, ingenuo, ¿qué? Diacríticos ḥ ṣ ṭ ā ī; griego Ἀβρασάξ.`}

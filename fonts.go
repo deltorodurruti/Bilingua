@@ -2,9 +2,8 @@ package main
 
 import _ "embed"
 
-// Fuente Unicode incrustada (Noto Sans, licencia OFL). Cubre acentos, comillas
-// curvas, guiones largos, diacríticos de transliteración y griego, para que el
-// PDF no muestre "letras raras" como pasaba con la fuente latin-1.
+// Embedded Unicode font (Noto Sans, OFL). Covers accents, curly quotes, dashes,
+// transliteration diacritics and Greek, which the latin-1 default mangled.
 //
 //go:embed fonts/NotoSans-Regular.ttf
 var notoRegular []byte

@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// keyPath: archivo local donde se recuerda la clave de DeepL
-// (Windows: %AppData%\Bilingua\deepl_key.txt · Mac: ~/Library/Application Support/…).
+// keyPath is where the DeepL key is remembered
+// (Windows: %AppData%\Bilingua\ · macOS: ~/Library/Application Support/Bilingua/).
 func keyPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {

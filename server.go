@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +39,11 @@ func newID() string {
 }
 
 func NewServer() *Server {
-	tmp, _ := os.MkdirTemp("", "bilingua")
+	tmp, err := os.MkdirTemp("", "bilingua")
+	if err != nil {
+		// Unchecked, s.tmp would be "" and PDFs would land in the working dir.
+		log.Fatalf("no se pudo crear la carpeta temporal: %v", err)
+	}
 	return &Server{jobs: map[string]*Job{}, tmp: tmp}
 }
 
@@ -53,13 +59,13 @@ func (s *Server) routes() *http.ServeMux {
 	return mux
 }
 
-// handleSaveKey persiste la clave apenas se ingresa (sin esperar a traducir).
+// handleSaveKey stores the key as soon as it is entered.
 func (s *Server) handleSaveKey(w http.ResponseWriter, r *http.Request) {
 	saveKey(r.URL.Query().Get("key"))
 	_, _ = w.Write([]byte("ok"))
 }
 
-// handleConfig devuelve la clave de DeepL guardada en el equipo (si hay).
+// handleConfig returns the DeepL key stored on this machine, if any.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"key": loadKey()})
@@ -71,7 +77,8 @@ func (s *Server) handleQuit(w http.ResponseWriter, r *http.Request) {
 	if fl, ok := w.(http.Flusher); ok {
 		fl.Flush()
 	}
-	go func() { time.Sleep(300 * time.Millisecond); os.Exit(0) }()
+	// Clear the temp dir on exit; otherwise every translated book stays there.
+	go func() { time.Sleep(300 * time.Millisecond); os.RemoveAll(s.tmp); os.Exit(0) }()
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +103,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	key := r.FormValue("key")
-	saveKey(key) // recordar la clave para la próxima vez
+	saveKey(key)
 	source := r.FormValue("source")
 	target := r.FormValue("target")
 	if target == "" {
@@ -131,6 +138,17 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	go func() {
+		// A panic here (damaged PDF) used to kill the whole process silently.
+		defer func() {
+			if r := recover(); r != nil {
+				job.mu.Lock()
+				job.err = fmt.Errorf("el PDF no se pudo procesar (¿archivo dañado o protegido?): %v", r)
+				job.done = true
+				job.mu.Unlock()
+				close(job.logs)
+			}
+		}()
+		defer os.Remove(inPath)
 		logf := func(line string) {
 			select {
 			case job.logs <- line:
@@ -190,7 +208,9 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "aún no está listo", 404)
 		return
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", job.outName))
+	// filename* (RFC 6266) keeps accents intact in Safari.
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q; filename*=UTF-8''%s",
+		job.outName, url.PathEscape(job.outName)))
 	w.Header().Set("Content-Type", "application/pdf")
 	http.ServeFile(w, r, job.outPath)
 }

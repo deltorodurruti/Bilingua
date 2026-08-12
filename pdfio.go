@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/go-pdf/fpdf"
 	"github.com/ledongthuc/pdf"
@@ -14,7 +15,7 @@ import (
 // Works on PDFs that carry a text layer; scanned PDFs (image-only) return little
 // or nothing — the caller should warn the user to OCR first.
 func ExtractParagraphs(path string) ([]string, error) {
-	byPage, err := ExtractParagraphsByPage(path)
+	byPage, _, err := ExtractParagraphsByPage(path)
 	if err != nil {
 		return nil, err
 	}
@@ -26,18 +27,20 @@ func ExtractParagraphs(path string) ([]string, error) {
 }
 
 // ExtractParagraphsByPage returns paragraphs grouped by page (index 0 = page 1);
-// knowing the page is what lets figures sit next to their caption.
+// knowing the page is what lets figures sit next to their caption. The second
+// value lists pages the reader could not decode, which must not be mistaken for
+// pages that simply carry no text.
 // The reader panics on damaged or oddly encrypted PDFs, so that is turned into
 // an error: otherwise the whole process died with no message.
-func ExtractParagraphsByPage(path string) (pages [][]string, err error) {
+func ExtractParagraphsByPage(path string) (pages [][]string, unreadable []int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			pages, err = nil, fmt.Errorf("el PDF no se pudo leer (¿archivo dañado o protegido?): %v", r)
+			pages, unreadable, err = nil, nil, fmt.Errorf("el PDF no se pudo leer (¿archivo dañado o protegido?): %v", r)
 		}
 	}()
 	f, r, err := pdf.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("no se pudo abrir el PDF: %w", err)
+		return nil, nil, fmt.Errorf("no se pudo abrir el PDF: %w", err)
 	}
 	defer f.Close()
 
@@ -47,16 +50,21 @@ func ExtractParagraphsByPage(path string) (pages [][]string, err error) {
 		p := r.Page(i)
 		if p.V.IsNull() {
 			pages = append(pages, nil)
+			unreadable = append(unreadable, i)
 			continue
 		}
+		// GetPlainText recovers internally, so a font or cmap it cannot decode
+		// surfaces here as an error, not a panic. Recording it keeps a damaged
+		// page from passing as an image-only one.
 		txt, err := p.GetPlainText(nil)
 		if err != nil {
 			pages = append(pages, nil)
+			unreadable = append(unreadable, i)
 			continue
 		}
 		pages = append(pages, splitParagraphs(txt))
 	}
-	return pages, nil
+	return pages, unreadable, nil
 }
 
 var multiNL = regexp.MustCompile(`\n{2,}`)
@@ -79,6 +87,13 @@ func splitParagraphs(text string) []string {
 			cut := 4000
 			if idx := strings.LastIndex(c[:4000], ". "); idx > 1000 {
 				cut = idx + 1
+			} else if idx := strings.LastIndexByte(c[:4000], ' '); idx > 1000 {
+				cut = idx
+			}
+			// Cutting mid-rune would turn the byte pair into U+FFFD on the way
+			// out, silently corrupting the text.
+			for cut > 0 && !utf8.RuneStart(c[cut]) {
+				cut--
 			}
 			out = append(out, strings.TrimSpace(c[:cut]))
 			c = strings.TrimSpace(c[cut:])
@@ -91,12 +106,12 @@ func splitParagraphs(text string) []string {
 // WritePDF builds the output PDF. mode: "bilingual" = original + translation,
 // "translation" = translation only.
 func WritePDF(outPath, title, mode string, originals, translations []string) error {
-	return WritePDFWithFigures(outPath, title, mode, originals, translations, nil)
+	return WritePDFWithFigures(outPath, title, mode, originals, translations, nil, nil)
 }
 
 // WritePDFWithFigures writes the final PDF. figsBefore maps a paragraph index to
 // the figures drawn just before it. A nil map behaves like WritePDF.
-func WritePDFWithFigures(outPath, title, mode string, originals, translations []string, figsBefore map[int][]Figure) error {
+func WritePDFWithFigures(outPath, title, mode string, originals, translations []string, figsBefore map[int][]Figure, logf func(string)) error {
 	pdfDoc := fpdf.New("P", "mm", "A4", "")
 	pdfDoc.SetMargins(22, 22, 22)
 	pdfDoc.SetAutoPageBreak(true, 20)
@@ -128,10 +143,20 @@ func WritePDFWithFigures(outPath, title, mode string, originals, translations []
 
 	solo := mode != "bilingual"
 	usableW := pw - lm - rm
-	for i := range translations {
-		for _, fg := range figsBefore[i] {
-			drawFigure(pdfDoc, fg, usableW, i)
+	seq := 0
+	drawn, failed := 0, 0
+	emit := func(figs []Figure) {
+		for _, fg := range figs {
+			seq++
+			if drawFigure(pdfDoc, fg, usableW, seq) {
+				drawn++
+			} else {
+				failed++
+			}
 		}
+	}
+	for i := range translations {
+		emit(figsBefore[i])
 		if !solo && i < len(originals) {
 			pdfDoc.SetFont("Noto", "I", 8)
 			pdfDoc.SetTextColor(150, 154, 162)
@@ -143,9 +168,15 @@ func WritePDFWithFigures(outPath, title, mode string, originals, translations []
 		pdfDoc.MultiCell(0, 5.4, translations[i], "", "J", false)
 		pdfDoc.Ln(3.6)
 	}
-	// Figures with nowhere to attach go last rather than being dropped.
-	for _, fg := range figsBefore[-1] {
-		drawFigure(pdfDoc, fg, usableW, -1)
+	// Anything not attached to a rendered paragraph goes last rather than being
+	// dropped: the -1 bucket plus any index beyond the last translation.
+	for k, figs := range figsBefore {
+		if k >= len(translations) || k < 0 {
+			emit(figs)
+		}
+	}
+	if failed > 0 && logf != nil {
+		logf(fmt.Sprintf("Aviso: %d de %d figuras no se pudieron incrustar (formato ilegible para el PDF).", failed, drawn+failed))
 	}
 	if err := pdfDoc.OutputFileAndClose(outPath); err != nil {
 		return fmt.Errorf("no se pudo escribir el PDF: %w", err)
@@ -153,18 +184,20 @@ func WritePDFWithFigures(outPath, title, mode string, originals, translations []
 	return nil
 }
 
-// drawFigure embeds a figure centred and scaled to the usable width.
-func drawFigure(pdfDoc *fpdf.Fpdf, fg Figure, usableW float64, idx int) {
-	name := fmt.Sprintf("fig_%d_%d_%d", fg.Page, idx, len(fg.Data))
+// drawFigure embeds a figure centred and scaled to the usable width. The name is
+// a plain counter: deriving it from the figure's data allowed two distinct
+// images to share a name, which made fpdf redraw the first one.
+func drawFigure(pdfDoc *fpdf.Fpdf, fg Figure, usableW float64, seq int) bool {
+	name := fmt.Sprintf("fig_%d", seq)
 	opt := fpdf.ImageOptions{ImageType: fg.Ext, ReadDpi: false}
 	info := pdfDoc.RegisterImageOptionsReader(name, opt, bytes.NewReader(fg.Data))
 	if info == nil || pdfDoc.Err() {
 		pdfDoc.ClearError() // an unreadable figure must not abort the book
-		return
+		return false
 	}
 	w, h := info.Extent()
 	if w <= 0 || h <= 0 {
-		return
+		return false
 	}
 	const maxH = 180.0 // mm, leaves room for text on A4
 	scale := 1.0
@@ -175,8 +208,9 @@ func drawFigure(pdfDoc *fpdf.Fpdf, fg Figure, usableW float64, idx int) {
 		scale = maxH / h
 	}
 	w, h = w*scale, h*scale
-	x := (pdfDoc.GetX()*0 + (usableW-w)/2) + func() float64 { l, _, _, _ := pdfDoc.GetMargins(); return l }()
+	lm, _, _, _ := pdfDoc.GetMargins()
 	pdfDoc.Ln(2)
-	pdfDoc.ImageOptions(name, x, pdfDoc.GetY(), w, h, true, opt, 0, "")
+	pdfDoc.ImageOptions(name, lm+(usableW-w)/2, pdfDoc.GetY(), w, h, true, opt, 0, "")
 	pdfDoc.Ln(2.5)
+	return true
 }

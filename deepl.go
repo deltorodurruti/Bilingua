@@ -72,6 +72,13 @@ func (d *DeepL) Translate(segments []string, source, target string) ([]string, e
 			time.Sleep(time.Duration(attempt+1) * 3 * time.Second)
 			continue
 		}
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			return nil, fmt.Errorf("DeepL rechazó la clave. Comprueba la que está guardada en %s "+
+				"o pasa otra con --key TU_CLAVE", keyPath())
+		}
+		if resp.StatusCode == 456 {
+			return nil, fmt.Errorf("se agotó tu cuota mensual de DeepL (error 456)")
+		}
 		if resp.StatusCode != 200 {
 			var er deeplResp
 			_ = json.Unmarshal(body, &er)

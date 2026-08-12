@@ -1,17 +1,22 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
+
+// A page holding this many characters counts as carrying real text.
+const textPageMinChars = 100
 
 // TranslateBook is the shared core used by both the CLI and the web GUI.
 // log receives human-readable progress lines.
 func TranslateBook(inPath, outPath, key, source, target, mode string, log func(string)) error {
 	log("Abriendo el PDF…")
-	byPage, err := ExtractParagraphsByPage(inPath)
+	byPage, unreadable, err := ExtractParagraphsByPage(inPath)
 	if err != nil {
 		return err
 	}
@@ -20,24 +25,42 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		paras = append(paras, ps...)
 	}
 
-	// Scanned or not is decided by how many pages carry text, not by the total:
-	// a hybrid book (300 scanned pages plus 2 with text) cleared the old absolute
-	// threshold, took the text path and silently produced a 2-page PDF.
-	var totalChars, textPages int
-	for _, ps := range byPage {
+	// Figures are read before deciding the route: a page with no text but a
+	// full-page image is a scan whose text would otherwise be dropped.
+	figsByPage := ExtractFigures(inPath, log)
+
+	var totalChars, textPages, scannedPages int
+	for i, ps := range byPage {
 		n := 0
 		for _, p := range ps {
-			n += len(p)
+			n += utf8.RuneCountInString(p)
 		}
 		totalChars += n
-		if n >= 100 {
+		if n >= textPageMinChars {
 			textPages++
+			continue
+		}
+		for _, fg := range figsByPage[i+1] {
+			if fg.IsLikelyPageScan() {
+				scannedPages++
+				break
+			}
 		}
 	}
-	if len(byPage) == 0 || textPages*2 < len(byPage) {
-		if textPages > 0 {
-			log(fmt.Sprintf("Solo %d de %d páginas traen texto: trato el libro como escaneado y lo mando entero al OCR de DeepL (así no se pierde ninguna página).", textPages, len(byPage)))
-		} else {
+
+	// The document endpoint runs OCR and keeps the layout, so it is the only
+	// route that covers scanned pages. Taking the text route while any page is
+	// a scan silently drops that page from the output.
+	if len(byPage) == 0 || scannedPages > 0 || len(unreadable) > 0 || textPages*2 < len(byPage) {
+		switch {
+		case len(unreadable) > 0:
+			log(fmt.Sprintf("%d páginas no se pudieron leer como texto (%s…): mando el libro entero al OCR de DeepL para no perderlas.",
+				len(unreadable), pageList(unreadable)))
+		case scannedPages > 0 && textPages > 0:
+			log(fmt.Sprintf("%d de %d páginas son imágenes escaneadas: mando el libro entero al OCR de DeepL para no perder ninguna.", scannedPages, len(byPage)))
+		case textPages > 0:
+			log(fmt.Sprintf("Solo %d de %d páginas traen texto: trato el libro como escaneado y lo mando entero al OCR de DeepL.", textPages, len(byPage)))
+		default:
 			log("Este PDF parece escaneado (sin texto seleccionable). Lo traduzco con el OCR de DeepL, conservando el diseño…")
 		}
 		d := NewDeepL(key)
@@ -57,15 +80,21 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 	if used, limit, uerr := d.Usage(); uerr == nil && limit > 0 {
 		log(fmt.Sprintf("Cuenta DeepL: %d/%d caracteres usados este mes.", used, limit))
 		if int64(totalChars) > (limit - used) {
-			log("⚠ Aviso: este libro podría superar tu cuota gratuita mensual de DeepL.")
+			// Starting anyway would spend what is left and still fail partway.
+			return fmt.Errorf("este libro necesita ~%d caracteres y en tu cuota mensual quedan %d.\n"+
+				"Espera al próximo ciclo, usa otra clave, o parte el PDF en tramos más chicos", totalChars, limit-used)
 		}
 	}
 
 	// Requests must stay under DeepL's limits: 50 text params and 128 KiB total.
 	const maxParams = 45
 	const maxBytes = 60000
-	translations := make([]string, 0, len(paras))
-	i := 0
+	partial := outPath + ".parcial.json"
+	translations := loadPartial(partial, paras)
+	if len(translations) > 0 {
+		log(fmt.Sprintf("Retomo una traducción anterior: %d de %d párrafos ya estaban hechos.", len(translations), len(paras)))
+	}
+	i := len(translations)
 	for i < len(paras) {
 		end := i
 		bytes := 0
@@ -79,7 +108,10 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		log(fmt.Sprintf("Traduciendo párrafos %d–%d de %d…", i+1, end, len(paras)))
 		out, err := d.Translate(paras[i:end], source, target)
 		if err != nil {
-			return fmt.Errorf("error traduciendo: %w", err)
+			// Keep what DeepL already charged for, so a retry resumes here.
+			savePartial(partial, paras, translations)
+			return fmt.Errorf("error traduciendo: %w\n"+
+				"Lo traducido hasta aquí queda guardado: vuelve a ejecutar el mismo comando y sigue desde el párrafo %d", err, i+1)
 		}
 		translations = append(translations, out...)
 		i = end
@@ -91,25 +123,90 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		return fmt.Errorf("desajuste de conteo (%d párrafos, %d traducciones): no se escribe un PDF incompleto", len(paras), len(translations))
 	}
 
-	// Figures are copied from the source and placed next to their caption.
-	figsBefore := placeFigures(byPage, ExtractFigures(inPath, log))
+	figsBefore := placeFigures(byPage, figsByPage)
 	if n := countFigures(figsBefore); n > 0 {
 		log(fmt.Sprintf("Figuras encontradas: %d (se copian junto a su leyenda).", n))
 	}
 
 	title := strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))
 	log("Generando el PDF de salida…")
-	if err := WritePDFWithFigures(outPath, title, mode, paras, translations, figsBefore); err != nil {
+	if err := WritePDFWithFigures(outPath, title, mode, paras, translations, figsBefore, log); err != nil {
 		return err
 	}
+	os.Remove(partial)
 	log("✓ Listo: " + outPath)
 	return nil
 }
 
+type partialFile struct {
+	Paragraphs   int      `json:"paragraphs"`
+	Fingerprint  string   `json:"fingerprint"`
+	Translations []string `json:"translations"`
+}
+
+// fingerprint ties a saved partial translation to the exact text it came from.
+func fingerprint(paras []string) string {
+	n := 0
+	for _, p := range paras {
+		n += len(p)
+	}
+	head, tail := "", ""
+	if len(paras) > 0 {
+		head = paras[0]
+		tail = paras[len(paras)-1]
+		if len(head) > 60 {
+			head = head[:60]
+		}
+		if len(tail) > 60 {
+			tail = tail[:60]
+		}
+	}
+	return fmt.Sprintf("%d/%d/%s|%s", len(paras), n, head, tail)
+}
+
+func loadPartial(path string, paras []string) []string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var p partialFile
+	if json.Unmarshal(b, &p) != nil || p.Fingerprint != fingerprint(paras) || len(p.Translations) > len(paras) {
+		os.Remove(path)
+		return nil
+	}
+	return p.Translations
+}
+
+func savePartial(path string, paras, translations []string) {
+	b, err := json.Marshal(partialFile{
+		Paragraphs:   len(paras),
+		Fingerprint:  fingerprint(paras),
+		Translations: translations,
+	})
+	if err == nil {
+		_ = os.WriteFile(path, b, 0o600)
+	}
+}
+
+func pageList(pages []int) string {
+	var b strings.Builder
+	for i, p := range pages {
+		if i == 5 {
+			break
+		}
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%d", p)
+	}
+	return b.String()
+}
+
 // placeFigures maps paragraph index -> figures to draw just before it, so a
-// plate lands on top of its caption. Extra figures go to the start of their
-// page, figures on text-less pages carry over, and anything left is emitted at
-// the end (key -1): none is ever dropped.
+// plate lands on top of its caption. Captions on their own line win; a loose
+// match is the fallback. Extra figures go to the start of their page, figures on
+// text-less pages carry over, and anything left is emitted at the end (key -1):
+// none is ever dropped.
 func placeFigures(byPage [][]string, figsByPage map[int][]Figure) map[int][]Figure {
 	if len(figsByPage) == 0 {
 		return nil
@@ -130,8 +227,15 @@ func placeFigures(byPage [][]string, figsByPage map[int][]Figure) map[int][]Figu
 		}
 		caps := make([]int, 0, len(figs))
 		for i, para := range paras {
-			if IsCaption(para) {
+			if IsAnchoredCaption(para) {
 				caps = append(caps, idx+i)
+			}
+		}
+		if len(caps) == 0 {
+			for i, para := range paras {
+				if IsCaption(para) {
+					caps = append(caps, idx+i)
+				}
 			}
 		}
 		for i, fg := range figs {

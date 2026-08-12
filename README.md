@@ -20,9 +20,11 @@ La primera vez, macOS bloquea los programas descargados de internet. Para desblo
 
 ```bash
 cd ~/Downloads
-xattr -d com.apple.quarantine Bilingua-mac
+xattr -c Bilingua-mac 2>/dev/null
 chmod +x Bilingua-mac
 ```
+
+(Si dice *«No such xattr»*, ya estaba desbloqueado: sigue adelante.)
 
 Luego ya puedes usarlo (ver abajo).
 
@@ -90,6 +92,7 @@ Deja el resultado al lado del original, como `libro (traducido).pdf`.
 **Consejo:** para no escribir `./Bilingua-mac` cada vez, muévelo a una carpeta del sistema y llámalo por su nombre:
 
 ```bash
+sudo mkdir -p /usr/local/bin
 sudo mv ~/Downloads/Bilingua-mac /usr/local/bin/bilingua
 bilingua --in libro.pdf
 ```
@@ -100,7 +103,14 @@ bilingua --in libro.pdf
 
 Necesitas una clave gratuita: créala en **[deepl.com/pro-api](https://www.deepl.com/pro-api)** (500.000 caracteres al mes sin costo) y copia tu *Authentication Key*.
 
-Se guarda **en tu equipo** (`~/Library/Application Support/Bilingua/` en Mac) y no se vuelve a pedir. Nunca se muestra en pantalla ni sale del computador salvo hacia DeepL.
+Se guarda **en tu equipo** (`~/Library/Application Support/Bilingua/deepl_key.txt` en Mac, con permisos que solo te dejan leerla a ti) y no se vuelve a pedir. Nunca se muestra en pantalla ni sale del computador salvo hacia DeepL.
+
+Si prefieres que **no quede en el historial de la terminal**, usa la variable de entorno en lugar de `--key`:
+
+```bash
+export BILINGUA_DEEPL_KEY="tu-clave:fx"
+bilingua --in libro.pdf
+```
 
 ---
 
@@ -110,12 +120,12 @@ DeepL limita el tamaño de cada documento que se le envía: **10 MB** con la cue
 
 - Si el PDF **cabe**, lo manda entero.
 - Si **no cabe**, lo divide en las **menos partes posibles**, traduce cada una y las **vuelve a unir** en un solo PDF. Mide cada parte de verdad antes de enviarla, así que una lámina pesada no rompe el proceso a mitad de camino.
-- Si una parte falla, **las ya traducidas se conservan**: vuelve a ejecutar el mismo comando y se reutilizan en vez de gastar cuota otra vez.
+- Si una parte falla, **las ya traducidas se conservan**: vuelve a ejecutar el mismo comando y se reutilizan en vez de gastar cuota otra vez. Lo mismo con los libros de texto: si se corta a mitad, retoma en el párrafo donde quedó.
 - Al final comprueba que el PDF unido tenga **todas las páginas** del original.
 
 > ⚠️ **Ojo con la cuota:** DeepL cobra un **mínimo de 50.000 caracteres por cada documento** enviado. Un libro dividido en 7 partes consume al menos 350.000 caracteres de tu cuota mensual, aunque tenga poco texto. Bilingua te avisa cuántas partes hará y cuánto costará antes de empezar.
 
-Los libros **híbridos** (mayoría de páginas escaneadas y unas pocas con texto) se detectan y se mandan enteros al OCR, para que no se pierda ninguna página.
+Los libros **híbridos** (páginas escaneadas mezcladas con páginas de texto) se detectan y se mandan enteros al OCR, para que no se pierda ninguna página. Si alguna página no se puede leer, te avisa y toma esa misma ruta en vez de saltársela.
 
 ---
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,7 +48,7 @@ func NewServer() *Server {
 	return &Server{jobs: map[string]*Job{}, tmp: tmp}
 }
 
-func (s *Server) routes() *http.ServeMux {
+func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/start", s.handleStart)
@@ -56,23 +57,55 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/quit", s.handleQuit)
 	mux.HandleFunc("/config", s.handleConfig)
 	mux.HandleFunc("/savekey", s.handleSaveKey)
-	return mux
+	return s.guard(mux)
 }
 
-// handleSaveKey stores the key as soon as it is entered.
+// guard keeps other pages in the browser from reaching this server. Without it
+// any website could read the stored DeepL key through /config (DNS rebinding),
+// overwrite it, or shut the program down.
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+			http.Error(w, "solicitud no permitida", http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" && o != "http://"+r.Host {
+			http.Error(w, "origen no permitido", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleSaveKey stores the key as soon as it is entered. POST only and read from
+// the body: a GET with the key in the query string is reachable from any page
+// and leaves the secret in browser history.
 func (s *Server) handleSaveKey(w http.ResponseWriter, r *http.Request) {
-	saveKey(r.URL.Query().Get("key"))
+	if r.Method != http.MethodPost {
+		http.Error(w, "usa POST", http.StatusMethodNotAllowed)
+		return
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 4096))
+	saveKey(strings.TrimSpace(string(body)))
 	_, _ = w.Write([]byte("ok"))
 }
 
-// handleConfig returns the DeepL key stored on this machine, if any.
+// handleConfig reports whether a key is stored, never the key itself.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"key": loadKey()})
+	_ = json.NewEncoder(w).Encode(map[string]bool{"hasKey": loadKey() != ""})
 }
 
 // handleQuit lets the GUI shut the program down (no console window to close).
 func (s *Server) handleQuit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "usa POST", http.StatusMethodNotAllowed)
+		return
+	}
 	_, _ = w.Write([]byte("ok"))
 	if fl, ok := w.(http.Flusher); ok {
 		fl.Flush()
@@ -102,8 +135,12 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	key := r.FormValue("key")
-	saveKey(key)
+	key := strings.TrimSpace(r.FormValue("key"))
+	if key == "" {
+		key = loadKey()
+	} else {
+		saveKey(key)
+	}
 	source := r.FormValue("source")
 	target := r.FormValue("target")
 	if target == "" {

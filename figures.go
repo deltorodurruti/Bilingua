@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	_ "image/jpeg" // decoders registered to read real image size
 	_ "image/png"
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
@@ -26,17 +28,30 @@ type Figure struct {
 // Below this side in pixels an image is decoration (rules, bullets, logos).
 const minFigurePx = 110
 
+// Above this many pixels an image is most likely a scan of the whole page
+// rather than a figure inside it.
+const pageScanPixels = 2_000_000
+
 // Safety cap: a pathological PDF can carry thousands of image fragments.
 const maxFigures = 400
 
 // Figure or table caption, Spanish and English, arabic or roman numbering.
-// Deliberately not anchored: the text extractor often returns a whole page as a
-// single paragraph, leaving the caption mid-block.
-var captionRe = regexp.MustCompile(`(?i)\b(fig(?:ure|ura|\.)|plate|l[áa]mina|tabla|cuadro|ilustraci[óo]n)\s*\.?\s*(\d{1,3}|[ivxlc]{1,6})\b`)
+var captionBody = `(fig(?:ure|ura|\.)|plate|l[áa]mina|tabla|cuadro|ilustraci[óo]n)\s*\.?\s*(\d{1,3}|[ivxlc]{1,6})\b`
+
+// A caption opening its own line is the real thing; the loose form also matches
+// cross references inside a sentence and is only used as a fallback, because the
+// text extractor often returns a whole page as a single paragraph.
+var captionAnchored = regexp.MustCompile(`(?im)^\s*` + captionBody)
+var captionLoose = regexp.MustCompile(`(?i)\b` + captionBody)
 
 // IsCaption reports whether a paragraph contains a figure caption.
 func IsCaption(p string) bool {
-	return captionRe.MatchString(strings.TrimSpace(p))
+	return captionLoose.MatchString(strings.TrimSpace(p))
+}
+
+// IsAnchoredCaption reports whether a paragraph starts a caption line.
+func IsAnchoredCaption(p string) bool {
+	return captionAnchored.MatchString(p)
 }
 
 // ExtractFigures returns the embedded images grouped by page. Unsupported
@@ -58,17 +73,27 @@ func ExtractFigures(path string, log func(string)) map[int][]Figure {
 		}
 		return out
 	}
+	if err != nil && log != nil {
+		log("Aviso: algunas imágenes no se pudieron leer y no se copiarán.")
+	}
 
-	n := 0
+	n, skippedFmt, capped := 0, 0, 0
 	for _, byObj := range pages {
-		for _, img := range byObj {
-			if n >= maxFigures {
-				if log != nil {
-					log("Aviso: el PDF trae demasiadas imágenes; se incluyen las primeras.")
-				}
-				return out
-			}
+		// Map order is random in Go; without sorting, figures on the same page
+		// came out shuffled and got paired with the wrong caption.
+		objs := make([]int, 0, len(byObj))
+		for obj := range byObj {
+			objs = append(objs, obj)
+		}
+		sort.Ints(objs)
+
+		for _, obj := range objs {
+			img := byObj[obj]
 			if img.IsImgMask {
+				continue
+			}
+			if n >= maxFigures {
+				capped++
 				continue
 			}
 			ext := strings.ToUpper(strings.TrimPrefix(img.FileType, "."))
@@ -76,10 +101,12 @@ func ExtractFigures(path string, log func(string)) map[int][]Figure {
 				ext = "JPG"
 			}
 			if ext != "PNG" && ext != "JPG" {
+				skippedFmt++
 				continue
 			}
 			var buf bytes.Buffer
 			if _, err := io.Copy(&buf, img); err != nil || buf.Len() == 0 {
+				skippedFmt++
 				continue
 			}
 			// pdfcpu often reports 0x0, so read the size from the image itself.
@@ -87,6 +114,7 @@ func ExtractFigures(path string, log func(string)) map[int][]Figure {
 			if w == 0 || h == 0 {
 				cfg, _, err := image.DecodeConfig(bytes.NewReader(buf.Bytes()))
 				if err != nil {
+					skippedFmt++
 					continue
 				}
 				w, h = cfg.Width, cfg.Height
@@ -100,5 +128,19 @@ func ExtractFigures(path string, log func(string)) map[int][]Figure {
 			n++
 		}
 	}
+	if log != nil {
+		if skippedFmt > 0 {
+			log(fmt.Sprintf("Aviso: %d imágenes en un formato que el PDF de salida no admite (JBIG2/JPX) no se copiaron.", skippedFmt))
+		}
+		if capped > 0 {
+			log(fmt.Sprintf("Aviso: el PDF trae muchas imágenes; se copian %d y se omiten %d.", n, capped))
+		}
+	}
 	return out
+}
+
+// IsLikelyPageScan reports whether a figure looks like the scan of a whole page
+// rather than an illustration inside one.
+func (f Figure) IsLikelyPageScan() bool {
+	return f.W*f.H >= pageScanPixels
 }

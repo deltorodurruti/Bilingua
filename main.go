@@ -4,6 +4,7 @@ package main
 
 import (
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -49,6 +51,7 @@ func main() {
 	// --in alone implies terminal mode.
 	if *cli || *in != "" {
 		if *in == "" {
+			fmt.Fprint(os.Stderr, "Falta indicar el PDF:  bilingua --in libro.pdf\n\n")
 			usage()
 			os.Exit(1)
 		}
@@ -73,6 +76,13 @@ func main() {
 		if o == "" {
 			ext := filepath.Ext(*in)
 			o = strings.TrimSuffix(*in, ext) + " (traducido).pdf"
+		}
+		// Checked up front: finding out at the end costs the DeepL quota already spent.
+		if dir := filepath.Dir(o); dir != "" {
+			if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+				fmt.Fprintf(os.Stderr, "No puedo guardar en %s: la carpeta no existe.\n", dir)
+				os.Exit(1)
+			}
 		}
 		start := time.Now()
 		logf := func(s string) {
@@ -100,8 +110,13 @@ func main() {
 	addr := fmt.Sprintf("127.0.0.1:%d", *port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		// Usually another Bilingua already running: point the browser at it
-		// instead of dying silently (there is no console in the GUI build).
+		// A busy port usually means another Bilingua is already running, so
+		// point the browser at it. Any other failure is a real error and must
+		// not be reported as success.
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			fmt.Fprintf(os.Stderr, "No pude abrir el puerto %d: %v\n", *port, err)
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "El puerto %d ya está ocupado (¿otra copia de Bilingua abierta?).\n"+
 			"Abro http://%s en el navegador. Si eso no es Bilingua, usa --port OTRO.\n", *port, addr)
 		openBrowser("http://" + addr)
@@ -140,6 +155,8 @@ Idiomas    ES · EN-US · EN-GB · FR · DE · IT · PT-BR · PT-PT · NL · PL 
            (--source vacío = detectar solo)
 
 Clave      Se pide una sola vez con --key y queda guardada en este equipo.
+           Alternativa sin dejar rastro en el historial del shell:
+             export BILINGUA_DEEPL_KEY="tu-clave:fx"
            Gratis (500.000 caracteres/mes) en https://www.deepl.com/pro-api
 
 Opciones

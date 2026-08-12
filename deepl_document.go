@@ -58,14 +58,23 @@ func (d *DeepL) TranslateDocument(inPath, outPath, source, target string, log fu
 	}
 	deadline := time.Now().Add(docTimeout)
 	last := ""
+	softFails := 0
 	for {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("DeepL lleva más de %s sin terminar este documento; lo doy por fallido", docTimeout)
 		}
 		status, secs, msg, err := d.documentStatus(id, dkey)
 		if err != nil {
-			return err
+			// The document is already paid for; a blip in the network must not
+			// throw it away. Only give up after several failures in a row.
+			softFails++
+			if softFails >= 6 {
+				return fmt.Errorf("se perdió la conexión con DeepL mientras traducía este documento: %w", err)
+			}
+			time.Sleep(time.Duration(softFails) * 5 * time.Second)
+			continue
 		}
+		softFails = 0
 		switch status {
 		case "done":
 			return d.downloadDocument(id, dkey, outPath)
@@ -181,8 +190,11 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 	}
 	limit := DocSizeLimit(d.key)
 
+	// The work dir is keyed to this exact job. Without the manifest a second
+	// book sharing --out, or the same book with a different target language,
+	// would reuse the previous parts and produce a wrong PDF.
 	work := outPath + ".partes"
-	if err := os.MkdirAll(work, 0o755); err != nil {
+	if err := ensureWorkDir(work, inPath, source, target, pages, limit); err != nil {
 		return err
 	}
 
@@ -198,8 +210,12 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 	done := make([]string, 0, len(specs))
 	for i, sp := range specs {
 		want := sp.end - sp.start + 1
-		outPart := filepath.Join(work, fmt.Sprintf("done-%03d.pdf", i))
-		if n, err := api.PageCountFile(outPart); err == nil && n == want {
+		outPart := filepath.Join(work, fmt.Sprintf("done-%03d-%d-%d.pdf", i, sp.start, sp.end))
+		// Only a short part means pages were lost. DeepL remakes the layout and
+		// Spanish runs longer than English, so a part may legitimately come back
+		// with more pages: demanding equality re-translated it forever, paying
+		// the 50,000-character minimum on every attempt.
+		if n, err := api.PageCountFile(outPart); err == nil && n >= want {
 			log(fmt.Sprintf("Parte %d/%d (págs %d–%d) ya estaba lista; la reutilizo.", i+1, len(specs), sp.start, sp.end))
 			done = append(done, outPart)
 			continue
@@ -210,9 +226,15 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 				"Las partes ya traducidas quedan en %s: vuelve a ejecutar el mismo comando y se reutilizan",
 				i+1, sp.start, sp.end, err, work)
 		}
-		// A returned document is not proof that every page came back.
-		if n, err := api.PageCountFile(outPart); err == nil && n != want {
+		n, err := api.PageCountFile(outPart)
+		if err != nil {
+			return fmt.Errorf("la parte %d volvió ilegible: %w", i+1, err)
+		}
+		if n < want {
 			return fmt.Errorf("la parte %d volvió con %d páginas en vez de %d; no uno un libro incompleto", i+1, n, want)
+		}
+		if n > want {
+			log(fmt.Sprintf("  (la parte %d creció de %d a %d páginas al traducirse; es normal)", i+1, want, n))
 		}
 		done = append(done, outPart)
 	}
@@ -224,11 +246,33 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 	if err := api.MergeCreateFile(done, outPath, false, nil); err != nil {
 		return fmt.Errorf("no se pudieron unir las partes: %w", err)
 	}
-	if n, err := api.PageCountFile(outPath); err == nil && n != pages {
-		return fmt.Errorf("el PDF unido tiene %d páginas y el original %d; las partes quedan en %s", n, pages, work)
+	n, err := api.PageCountFile(outPath)
+	if err != nil || n < pages {
+		return fmt.Errorf("el PDF unido no se pudo verificar (%d páginas frente a %d del original, err=%v); "+
+			"las partes quedan en %s", n, pages, err, work)
 	}
 	os.RemoveAll(work)
 	return nil
+}
+
+// ensureWorkDir prepares the resume directory and guarantees its contents belong
+// to this input, language pair and limit; otherwise it starts clean.
+func ensureWorkDir(work, inPath, source, target string, pages int, limit int64) error {
+	fi, err := os.Stat(inPath)
+	if err != nil {
+		return err
+	}
+	want := fmt.Sprintf("%d|%d|%d|%d|%s|%s", fi.Size(), fi.ModTime().UnixNano(), pages, limit,
+		strings.ToUpper(source), strings.ToUpper(target))
+	stamp := filepath.Join(work, "manifiesto.txt")
+	if got, err := os.ReadFile(stamp); err == nil && string(got) == want {
+		return nil
+	}
+	os.RemoveAll(work)
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(stamp, []byte(want), 0o644)
 }
 
 func thousands(n int64) string {
@@ -332,13 +376,27 @@ func (d *DeepL) downloadDocument(id, key, outPath string) error {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("DeepL %d al descargar: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	out, err := os.Create(outPath)
+	// Write to a temporary file and rename: writing straight to outPath meant a
+	// dropped connection destroyed a good previous file and left a truncated PDF
+	// under the right name.
+	tmp := outPath + ".descargando"
+	out, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 	if _, err := io.Copy(out, resp.Body); err != nil {
+		out.Close()
+		os.Remove(tmp)
 		return err
 	}
-	return out.Sync()
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, outPath)
 }

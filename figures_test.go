@@ -80,7 +80,7 @@ func TestExtraeYPegaFigura(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	byPage, err := ExtractParagraphsByPage(in)
+	byPage, _, err := ExtractParagraphsByPage(in)
 	if err != nil {
 		t.Fatalf("no se pudo extraer el texto: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestExtraeYPegaFigura(t *testing.T) {
 		tr[i] = "[traducido] " + p
 	}
 	out := t.TempDir() + "/salida.pdf"
-	if err := WritePDFWithFigures(out, "Prueba", "translation", paras, tr, placeFigures(byPage, figs)); err != nil {
+	if err := WritePDFWithFigures(out, "Prueba", "translation", paras, tr, placeFigures(byPage, figs), nil); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(out)

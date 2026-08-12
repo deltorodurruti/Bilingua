@@ -30,11 +30,13 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 	figsByPage := ExtractFigures(inPath, log)
 
 	var totalChars, textPages, scannedPages int
+	charsByPage := make([]int, len(byPage))
 	for i, ps := range byPage {
 		n := 0
 		for _, p := range ps {
 			n += utf8.RuneCountInString(p)
 		}
+		charsByPage[i] = n
 		totalChars += n
 		if n >= textPageMinChars {
 			textPages++
@@ -65,7 +67,19 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		}
 		d := NewDeepL(key)
 		d.log = log
+		d.charsByPage = charsByPage
+		// A document is rejected for holding too much text, not just for being
+		// too big, so either ceiling sends the book through the splitter.
+		tooBig := false
 		if fi, serr := os.Stat(inPath); serr == nil && fi.Size() > DocSizeLimit(key) {
+			tooBig = true
+		}
+		if int64(totalChars) > DocCharLimit(key) {
+			log(fmt.Sprintf("El libro tiene %s caracteres y un documento admite %s: lo divido en partes.",
+				thousands(int64(totalChars)), thousands(DocCharLimit(key))))
+			tooBig = true
+		}
+		if tooBig {
 			if err := d.TranslateLargeScan(inPath, outPath, source, target, log); err != nil {
 				return fmt.Errorf("error traduciendo el escaneo grande: %w", err)
 			}

@@ -20,6 +20,9 @@ import (
 const (
 	freeDocLimit = 10 << 20
 	proDocLimit  = 100 << 20
+	// A document also has a character ceiling, separate from its size.
+	freeDocChars = 500_000
+	proDocChars  = 1_000_000
 	// Every submitted document is billed a minimum of 50,000 characters, so
 	// each extra part costs quota even if it is nearly empty. Parts are made
 	// as large as the size limit allows to keep their number down.
@@ -38,6 +41,17 @@ func DocSizeLimit(keys string) int64 {
 	for _, k := range splitKeys(keys) {
 		if strings.HasSuffix(k, ":fx") {
 			limit = freeDocLimit
+		}
+	}
+	return limit
+}
+
+// DocCharLimit returns the per-document character ceiling that applies.
+func DocCharLimit(keys string) int64 {
+	limit := int64(proDocChars)
+	for _, k := range splitKeys(keys) {
+		if strings.HasSuffix(k, ":fx") {
+			limit = freeDocChars
 		}
 	}
 	return limit
@@ -116,7 +130,7 @@ type partSpec struct {
 // upload limit. Ranges are measured after trimming, never assumed: pages differ
 // wildly in weight (a colour plate can be 8 MB) and pdfcpu copies shared
 // resources into every part.
-func planParts(inPath, work string, pages int, limit int64, log func(string)) ([]partSpec, error) {
+func planParts(inPath, work string, pages int, limit int64, charsByPage []int, charLimit int64, log func(string)) ([]partSpec, error) {
 	fi, err := os.Stat(inPath)
 	if err != nil {
 		return nil, err
@@ -139,6 +153,18 @@ func planParts(inPath, work string, pages int, limit int64, log func(string)) ([
 		end := start + span - 1
 		if end > pages {
 			end = pages
+		}
+		// Also respect the character ceiling: a part can fit the size limit and
+		// still be rejected for holding too much text.
+		if charLimit > 0 && len(charsByPage) >= pages {
+			acc := int64(0)
+			for p := start; p <= end; p++ {
+				acc += int64(charsByPage[p-1])
+				if acc > charLimit && p > start {
+					end = p - 1
+					break
+				}
+			}
 		}
 		got, err := trimFit(inPath, work, start, end, limit, len(out), log)
 		if err != nil {
@@ -194,7 +220,8 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 	if pages < 1 {
 		return fmt.Errorf("el PDF no tiene páginas")
 	}
-	limit := DocSizeLimit(strings.Join(d.keys, "\n"))
+	allKeys := strings.Join(d.keys, "\n")
+	limit := DocSizeLimit(allKeys)
 
 	// The work dir is keyed to this exact job. Without the manifest a second
 	// book sharing --out, or the same book with a different target language,
@@ -205,7 +232,7 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 	}
 
 	log("Preparando las partes (mido cada tramo para que ninguna supere el límite)…")
-	specs, err := planParts(inPath, work, pages, limit, log)
+	specs, err := planParts(inPath, work, pages, limit, d.charsByPage, DocCharLimit(allKeys), log)
 	if err != nil {
 		return err
 	}

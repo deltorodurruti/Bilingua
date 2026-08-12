@@ -19,6 +19,9 @@ type DeepL struct {
 	idx    int
 	client *http.Client
 	log    func(string)
+	// charsByPage feeds the splitter so a part never exceeds the character
+	// ceiling of a document.
+	charsByPage []int
 	// testEndpoint overrides the API URL in tests.
 	testEndpoint string
 }

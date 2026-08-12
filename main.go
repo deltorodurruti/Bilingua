@@ -26,9 +26,11 @@ func main() {
 	cli := flag.Bool("cli", false, "modo terminal (sin abrir el navegador)")
 	in := flag.String("in", "", "PDF a traducir")
 	out := flag.String("out", "", "PDF de salida (por defecto: <entrada> (traducido).pdf)")
-	// Default stays empty on purpose: flag prints defaults, so reading the env
-	// var here would leak the key in --help.
-	key := flag.String("key", "", "clave de DeepL; se guarda. Repite el flag o sepáralas con comas para tener varias")
+	// A custom value so repeating --key accumulates; flag.String keeps only the
+	// last one. The default stays empty on purpose: flag prints defaults, so
+	// reading the env var here would leak the key in --help.
+	var key keyList
+	flag.Var(&key, "key", "clave de DeepL; se guarda. Repite --key para añadir varias")
 	source := flag.String("source", "", "idioma de origen; vacío = detectar solo. Ej: EN")
 	target := flag.String("target", "ES", "idioma de destino. Ej: ES")
 	mode := flag.String("mode", "translation", "translation = solo la traducción · bilingual = original y traducción")
@@ -41,13 +43,24 @@ func main() {
 	// A key given on the command line is added to the stored list rather than
 	// replacing it, so a second account can take over when the first runs out.
 	// Precedence: --key and the env var are added; whatever is stored is used.
-	if k := strings.TrimSpace(*key); k != "" {
-		addKeys(splitKeys(k))
+	if len(key) > 0 {
+		addKeys(key)
 	}
 	if k := strings.TrimSpace(os.Getenv("BILINGUA_DEEPL_KEY")); k != "" {
 		addKeys(splitKeys(k))
 	}
-	*key = strings.Join(loadKeys(), "\n")
+	// Adding keys is a job of its own: without a PDF, save and report instead of
+	// opening the browser.
+	if len(key) > 0 && *in == "" && !*cli {
+		stored := loadKeys()
+		fmt.Printf("✓ Guardada. Tienes %d clave(s) en %s\n", len(stored), keyPath())
+		if len(stored) > 1 {
+			fmt.Println("  Cuando la primera agote su cuota mensual, seguirá con la siguiente.")
+		}
+		fmt.Println("\nAhora ya puedes traducir:  bilingua --in libro.pdf --verbose")
+		return
+	}
+	keys := strings.Join(loadKeys(), "\n")
 
 	// --in alone implies terminal mode.
 	if *cli || *in != "" {
@@ -63,7 +76,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%s es una carpeta; indica un PDF.\n", *in)
 			os.Exit(1)
 		}
-		if *key == "" {
+		if keys == "" {
 			fmt.Fprintln(os.Stderr, "Falta la clave de DeepL.")
 			fmt.Fprintln(os.Stderr, "  Consíguela gratis en https://www.deepl.com/pro-api y pásala una vez con --key TU_CLAVE")
 			fmt.Fprintln(os.Stderr, "  (queda guardada en este equipo; las próximas veces no hace falta).")
@@ -101,7 +114,7 @@ func main() {
 		} else {
 			logf(fmt.Sprintf("Bilingua — %s → %s, %s", orAuto(*source), strings.ToUpper(*target), modeName(*mode)))
 		}
-		if err := TranslateBook(*in, o, *key, *source, *target, *mode, logf); err != nil {
+		if err := TranslateBook(*in, o, keys, *source, *target, *mode, logf); err != nil {
 			fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 			os.Exit(1)
 		}
@@ -143,6 +156,16 @@ func main() {
 	}
 }
 
+// keyList lets --key be repeated; each use adds a key.
+type keyList []string
+
+func (k *keyList) String() string { return "" }
+
+func (k *keyList) Set(v string) error {
+	*k = append(*k, splitKeys(v)...)
+	return nil
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `Bilingua — traduce libros PDF con DeepL (también escaneados, con OCR).
 
@@ -163,8 +186,7 @@ Idiomas    ES · EN-US · EN-GB · FR · DE · IT · PT-BR · PT-PT · NL · PL 
 Claves     Se piden una sola vez con --key y quedan guardadas en este equipo.
            Puedes tener VARIAS: cuando una agota su cuota mensual, sigue con la
            siguiente sin perder lo ya traducido.
-             bilingua --key PRIMERA:fx --in libro.pdf     (guarda la primera)
-             bilingua --key SEGUNDA:fx --in libro.pdf     (añade la segunda)
+             bilingua --key PRIMERA:fx --key SEGUNDA:fx   (guarda las dos y sale)
            Se guardan en el archivo de abajo, una por línea; puedes editarlo.
            Gratis (500.000 caracteres/mes cada una) en https://www.deepl.com/pro-api
 

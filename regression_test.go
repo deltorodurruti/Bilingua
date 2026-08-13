@@ -29,13 +29,13 @@ func TestSplitParagraphsKeepsValidUTF8(t *testing.T) {
 func TestPartialResumeOnlyMatchingText(t *testing.T) {
 	path := t.TempDir() + "/parcial.json"
 	paras := []string{"uno", "dos", "tres"}
-	savePartial(path, paras, []string{"one", "two"})
+	savePartial(path, paras, []string{"one", "two"}, "EN|ES|translation")
 
-	if got := loadPartial(path, paras); len(got) != 2 {
+	if got := loadPartial(path, paras, "EN|ES|translation"); len(got) != 2 {
 		t.Fatalf("debía retomar 2 párrafos, obtuvo %d", len(got))
 	}
 	// Different book, same output name: the partial must be discarded.
-	if got := loadPartial(path, []string{"otro", "libro", "distinto"}); got != nil {
+	if got := loadPartial(path, []string{"otro", "libro", "distinto"}, "EN|ES|translation"); got != nil {
 		t.Fatalf("no debía reutilizar una traducción de otro texto: %v", got)
 	}
 	if _, err := os.Stat(path); err == nil {
@@ -88,5 +88,19 @@ func TestAnchoredCaptionBeatsCrossReference(t *testing.T) {
 	}
 	if !IsCaption("como se ve en la figura 4, el sello es doble") {
 		t.Errorf("la forma laxa sigue sirviendo de respaldo")
+	}
+}
+
+// Resuming with a different target language must not reuse the partial.
+func TestPartialResumeRejectsOtherTarget(t *testing.T) {
+	path := t.TempDir() + "/p.json"
+	paras := []string{"one", "two", "three"}
+	savePartial(path, paras, []string{"uno", "dos"}, "EN|ES|translation")
+	if got := loadPartial(path, paras, "EN|ES|translation"); len(got) != 2 {
+		t.Fatalf("same target should resume, got %d", len(got))
+	}
+	savePartial(path, paras, []string{"uno", "dos"}, "EN|ES|translation")
+	if got := loadPartial(path, paras, "EN|FR|translation"); got != nil {
+		t.Fatalf("different target must discard the partial, got %v", got)
 	}
 }

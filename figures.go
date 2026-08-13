@@ -204,6 +204,9 @@ func bareTIFF(data []byte) (image.Image, error) {
 		} else if typ != 3 {
 			continue // only SHORT/LONG matter for the tags we read
 		}
+		if n < 0 || n > len(data) {
+			return nil, fmt.Errorf("tiff: bad tag count") // never allocate on an attacker-set count
+		}
 		off := p + 8
 		if n*size > 4 {
 			off = int(bo.Uint32(data[p+8:]))
@@ -238,7 +241,8 @@ func bareTIFF(data []byte) (image.Image, error) {
 			return nil, fmt.Errorf("tiff: %d bits/sample", b)
 		}
 	}
-	if w <= 0 || h <= 0 || (spp != 1 && spp != 3 && spp != 4) {
+	if w <= 0 || h <= 0 || w > 20000 || h > 20000 || (spp != 1 && spp != 3 && spp != 4) {
+		// bound the dimensions so w*h*spp cannot overflow int and skip the guards
 		return nil, fmt.Errorf("tiff: unsupported geometry")
 	}
 	var pix []byte

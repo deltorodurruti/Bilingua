@@ -124,6 +124,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 200<<20) // cap uploads at 200 MB
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		http.Error(w, "archivo demasiado grande o inválido", 400)
 		return
@@ -135,12 +136,12 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	key := strings.TrimSpace(r.FormValue("key"))
-	if key == "" {
-		key = loadKey()
-	} else {
-		saveKey(key)
+	// Use every stored key, not just the first, so the GUI gets the same
+	// multi-key failover as the CLI.
+	if k := strings.TrimSpace(r.FormValue("key")); k != "" {
+		saveKey(k)
 	}
+	key := strings.Join(loadKeys(), "\n")
 	source := r.FormValue("source")
 	target := r.FormValue("target")
 	if target == "" {
@@ -241,7 +242,14 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	job := s.jobs[id]
 	s.mu.Unlock()
-	if job == nil || !job.done || job.err != nil {
+	if job == nil {
+		http.Error(w, "aún no está listo", 404)
+		return
+	}
+	job.mu.Lock()
+	ready := job.done && job.err == nil
+	job.mu.Unlock()
+	if !ready {
 		http.Error(w, "aún no está listo", 404)
 		return
 	}

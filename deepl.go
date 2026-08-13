@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,6 +67,10 @@ func (d *DeepL) endpoint() string {
 	return "https://api.deepl.com/v2/translate"
 }
 
+// ErrQuota marks that every configured key ran out of monthly quota, so a
+// caller can fall back to a local model instead of just failing.
+var ErrQuota = errors.New("cuota de DeepL agotada")
+
 type deeplResp struct {
 	Translations []struct {
 		Text                   string `json:"text"`
@@ -101,8 +106,14 @@ func (d *DeepL) Translate(segments []string, source, target string) ([]string, e
 			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
+		body, rerr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		if rerr != nil {
+			// a dropped read is transient, not a reason to abort the book
+			lastErr = rerr
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+			continue
+		}
 
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			// rate limited or server error: back off and retry
@@ -118,7 +129,8 @@ func (d *DeepL) Translate(segments []string, source, target string) ([]string, e
 				continue
 			}
 			return nil, fmt.Errorf("se agotó la cuota mensual de %s (error 456). "+
-				"Añade otra clave con --key OTRA_CLAVE y vuelve a ejecutar: se retoma donde quedó", plural(len(d.keys), "tu clave", "todas tus claves"))
+				"Añade otra clave con --key OTRA_CLAVE y reejecuta (se retoma donde quedó): %w",
+				plural(len(d.keys), "tu clave", "todas tus claves"), ErrQuota)
 		}
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
 			if d.nextKey("fue rechazada") {
@@ -146,6 +158,10 @@ func (d *DeepL) Translate(segments []string, source, target string) ([]string, e
 		}
 		return out, nil
 	}
+	// Another key may sit behind a different rate limit / not be down.
+	if d.nextKey("no respondió tras varios intentos") {
+		return d.Translate(segments, source, target)
+	}
 	return nil, fmt.Errorf("DeepL no respondió tras varios intentos: %w", lastErr)
 }
 
@@ -171,6 +187,9 @@ func (d *DeepL) usageOf(key string) (used, limit int64, err error) {
 		return 0, 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return 0, 0, fmt.Errorf("DeepL %d al consultar el uso", resp.StatusCode)
+	}
 	var u struct {
 		CharacterCount int64 `json:"character_count"`
 		CharacterLimit int64 `json:"character_limit"`

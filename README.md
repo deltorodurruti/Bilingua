@@ -140,6 +140,29 @@ Se guardan una por línea en `~/Library/Application Support/Bilingua/deepl_key.t
 
 ---
 
+## 🦙 Sin conexión / cuota agotada: modelo local (Ollama)
+
+Cuando se agota la cuota de **todas** tus claves de DeepL, Bilingua puede seguir con un modelo que corre **en tu propio equipo** con [Ollama](https://ollama.com) — gratis e ilimitado.
+
+```bash
+# una vez: instala Ollama y baja un modelo
+ollama pull qwen2.5           # buen traductor, ~5 GB
+ollama serve                  # déjalo corriendo en otra terminal
+
+# traduce: usa DeepL hasta agotar la cuota y de ahí sigue con Ollama
+bilingua --in libro.pdf --key TU_CLAVE:fx --ollama qwen2.5
+```
+
+También sin ninguna clave de DeepL: `bilingua --in libro.pdf --ollama qwen2.5`.
+
+Dos límites honestos:
+- La calidad es **buena pero por debajo de DeepL**, y es **más lento** (traduce párrafo por párrafo en tu máquina).
+- Sirve para **libros de texto**, no para escaneados: un modelo local no hace OCR ni conserva el diseño; eso solo lo hace DeepL.
+
+El modelo y el servidor se pueden fijar con variables de entorno: `BILINGUA_OLLAMA_MODEL` y `BILINGUA_OLLAMA_HOST` (por defecto `http://127.0.0.1:11434`).
+
+---
+
 ## 📄 Libros grandes y escaneados
 
 DeepL limita el tamaño de cada documento que se le envía: **10 MB** con la cuenta gratuita y **100 MB** con la de pago. Bilingua se encarga solo:

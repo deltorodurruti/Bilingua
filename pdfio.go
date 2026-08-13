@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -178,8 +179,16 @@ func WritePDFWithFigures(outPath, title, mode string, originals, translations []
 	if failed > 0 && logf != nil {
 		logf(fmt.Sprintf("Aviso: %d de %d figuras no se pudieron incrustar (formato ilegible para el PDF).", failed, drawn+failed))
 	}
-	if err := pdfDoc.OutputFileAndClose(outPath); err != nil {
+	// Write to a temporary file and rename: a crash mid-write must not leave a
+	// truncated PDF, nor destroy a good one from a previous run.
+	tmp := outPath + ".escribiendo"
+	if err := pdfDoc.OutputFileAndClose(tmp); err != nil {
+		os.Remove(tmp)
 		return fmt.Errorf("no se pudo escribir el PDF: %w", err)
+	}
+	if err := os.Rename(tmp, outPath); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("no se pudo guardar el PDF: %w", err)
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,16 +66,27 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		}
 		d := NewDeepL(key)
 		d.log = log
-		d.charsByPage = charsByPage
-		// A document is rejected for holding too much text, not just for being
-		// too big, so either ceiling sends the book through the splitter.
+		// A genuine scan has no extractable text, so totalChars is ~0 and cannot
+		// gauge how much the OCR will produce. Estimate it from the page count so
+		// a long scan is split instead of being rejected whole by DeepL.
+		const estCharsPerScanPage = 2000
+		est := make([]int, len(byPage))
+		estTotal := 0
+		for j := range est {
+			est[j] = charsByPage[j]
+			if est[j] < estCharsPerScanPage {
+				est[j] = estCharsPerScanPage
+			}
+			estTotal += est[j]
+		}
+		d.charsByPage = est
 		tooBig := false
 		if fi, serr := os.Stat(inPath); serr == nil && fi.Size() > DocSizeLimit(key) {
 			tooBig = true
 		}
-		if int64(totalChars) > DocCharLimit(key) {
-			log(fmt.Sprintf("El libro tiene %s caracteres y un documento admite %s: lo divido en partes.",
-				thousands(int64(totalChars)), thousands(DocCharLimit(key))))
+		if int64(estTotal) > DocCharLimit(key) {
+			log(fmt.Sprintf("El libro rondaría %s caracteres al pasar por OCR y un documento admite %s: lo divido en partes.",
+				thousands(int64(estTotal)), thousands(DocCharLimit(key))))
 			tooBig = true
 		}
 		if tooBig {
@@ -98,6 +110,7 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		log(fmt.Sprintf("%d páginas son imágenes a página completa: las conservo como figuras (si alguna fuese texto escaneado, ese texto quedaría sin traducir; revísalas).", scannedPages))
 	}
 
+	ol := ollamaFromEnv()
 	d := NewDeepL(key)
 	d.log = log
 	if used, limit, uerr := d.Usage(); uerr == nil && limit > 0 {
@@ -107,9 +120,12 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 			log(fmt.Sprintf("Cuenta DeepL: %d/%d caracteres usados este mes.", used, limit))
 		}
 		if int64(totalChars) > (limit - used) {
-			// Starting anyway would spend what is left and still fail partway.
-			return fmt.Errorf("este libro necesita ~%d caracteres y en tu cuota mensual quedan %d.\n"+
-				"Espera al próximo ciclo, usa otra clave, o parte el PDF en tramos más chicos", totalChars, limit-used)
+			if ol == nil {
+				// Starting anyway would spend what is left and still fail partway.
+				return fmt.Errorf("este libro necesita ~%d caracteres y en tu cuota mensual quedan %d.\n"+
+					"Espera al próximo ciclo, usa otra clave, o parte el PDF en tramos más chicos", totalChars, limit-used)
+			}
+			log("La cuota de DeepL no alcanza para todo el libro; lo que falte lo traduce Ollama (local, gratis, más lento).")
 		}
 	}
 
@@ -117,10 +133,12 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 	const maxParams = 45
 	const maxBytes = 60000
 	partial := outPath + ".parcial.json"
-	translations := loadPartial(partial, paras)
+	tag := strings.ToUpper(source) + "|" + strings.ToUpper(target) + "|" + mode
+	translations := loadPartial(partial, paras, tag)
 	if len(translations) > 0 {
 		log(fmt.Sprintf("Retomo una traducción anterior: %d de %d párrafos ya estaban hechos.", len(translations), len(paras)))
 	}
+	useOllama := d.key() == "" && ol != nil
 	i := len(translations)
 	for i < len(paras) {
 		end := i
@@ -132,16 +150,34 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		if end == i { // a single oversized paragraph — send it alone
 			end = i + 1
 		}
-		log(fmt.Sprintf("Traduciendo párrafos %d–%d de %d…", i+1, end, len(paras)))
-		out, err := d.Translate(paras[i:end], source, target)
+		via := "DeepL"
+		if useOllama {
+			via = "Ollama"
+		}
+		log(fmt.Sprintf("Traduciendo párrafos %d–%d de %d (%s)…", i+1, end, len(paras), via))
+		var out []string
+		var err error
+		if useOllama {
+			out, err = ol.Translate(paras[i:end], source, target)
+		} else {
+			out, err = d.Translate(paras[i:end], source, target)
+			if err != nil && ol != nil && errors.Is(err, ErrQuota) {
+				log("Se agotó la cuota de DeepL; sigo con Ollama (" + ol.model + "), local y gratis pero más lento…")
+				useOllama = true
+				out, err = ol.Translate(paras[i:end], source, target)
+			}
+		}
 		if err != nil {
-			// Keep what DeepL already charged for, so a retry resumes here.
-			savePartial(partial, paras, translations)
+			// Keep what was already done, so a retry resumes here.
+			savePartial(partial, paras, translations, tag)
 			return fmt.Errorf("error traduciendo: %w\n"+
 				"Lo traducido hasta aquí queda guardado: vuelve a ejecutar el mismo comando y sigue desde el párrafo %d", err, i+1)
 		}
 		translations = append(translations, out...)
 		i = end
+		// Checkpoint after every batch: an interruption (Ctrl-C, crash) must not
+		// discard work already paid for.
+		savePartial(partial, paras, translations, tag)
 	}
 
 	// One translation per paragraph sent; a mismatch would misalign the whole
@@ -171,8 +207,9 @@ type partialFile struct {
 	Translations []string `json:"translations"`
 }
 
-// fingerprint ties a saved partial translation to the exact text it came from.
-func fingerprint(paras []string) string {
+// fingerprint ties a saved partial translation to the exact text AND the target
+// it came from, so resuming with another --target does not reuse the wrong one.
+func fingerprint(paras []string, tag string) string {
 	n := 0
 	for _, p := range paras {
 		n += len(p)
@@ -188,26 +225,26 @@ func fingerprint(paras []string) string {
 			tail = tail[:60]
 		}
 	}
-	return fmt.Sprintf("%d/%d/%s|%s", len(paras), n, head, tail)
+	return fmt.Sprintf("%s|%d/%d/%s|%s", tag, len(paras), n, head, tail)
 }
 
-func loadPartial(path string, paras []string) []string {
+func loadPartial(path string, paras []string, tag string) []string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 	var p partialFile
-	if json.Unmarshal(b, &p) != nil || p.Fingerprint != fingerprint(paras) || len(p.Translations) > len(paras) {
+	if json.Unmarshal(b, &p) != nil || p.Fingerprint != fingerprint(paras, tag) || len(p.Translations) > len(paras) {
 		os.Remove(path)
 		return nil
 	}
 	return p.Translations
 }
 
-func savePartial(path string, paras, translations []string) {
+func savePartial(path string, paras, translations []string, tag string) {
 	b, err := json.Marshal(partialFile{
 		Paragraphs:   len(paras),
-		Fingerprint:  fingerprint(paras),
+		Fingerprint:  fingerprint(paras, tag),
 		Translations: translations,
 	})
 	if err == nil {

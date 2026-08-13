@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -30,6 +31,10 @@ const (
 	// Stop waiting for a document that DeepL never finishes.
 	docTimeout = 45 * time.Minute
 )
+
+// errDocPermanent marks a non-retryable DeepL response (expired/unknown doc)
+// so the poller stops instead of retrying it six times.
+var errDocPermanent = errors.New("documento no recuperable")
 
 // Uploads and downloads are slow; /translate timeouts are not enough.
 var docClient = &http.Client{Timeout: 10 * time.Minute}
@@ -85,6 +90,9 @@ func (d *DeepL) TranslateDocument(inPath, outPath, source, target string, log fu
 		}
 		status, secs, msg, err := d.documentStatus(id, dkey, authKey)
 		if err != nil {
+			if errors.Is(err, errDocPermanent) {
+				return fmt.Errorf("DeepL no pudo entregar este documento: %w", err)
+			}
 			// The document is already paid for; a blip in the network must not
 			// throw it away. Only give up after several failures in a row.
 			softFails++
@@ -263,11 +271,11 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 		if err != nil {
 			return fmt.Errorf("la parte %d volvió ilegible: %w", i+1, err)
 		}
-		if n < want {
-			return fmt.Errorf("la parte %d volvió con %d páginas en vez de %d; no uno un libro incompleto", i+1, n, want)
-		}
-		if n > want {
-			log(fmt.Sprintf("  (la parte %d creció de %d a %d páginas al traducirse; es normal)", i+1, want, n))
+		if n != want {
+			// DeepL reflows the layout, so the page count legitimately changes
+			// (Spanish is longer; blank pages may merge). It delivered the part,
+			// so keep it and just note the change.
+			log(fmt.Sprintf("  (la parte %d pasó de %d a %d páginas al traducirse)", i+1, want, n))
 		}
 		done = append(done, outPart)
 	}
@@ -280,9 +288,11 @@ func (d *DeepL) TranslateLargeScan(inPath, outPath, source, target string, log f
 		return fmt.Errorf("no se pudieron unir las partes: %w", err)
 	}
 	n, err := api.PageCountFile(outPath)
-	if err != nil || n < pages {
-		return fmt.Errorf("el PDF unido no se pudo verificar (%d páginas frente a %d del original, err=%v); "+
-			"las partes quedan en %s", n, pages, err, work)
+	if err != nil {
+		return fmt.Errorf("el PDF unido no se pudo leer (err=%v); las partes quedan en %s", err, work)
+	}
+	if n < pages {
+		log(fmt.Sprintf("Aviso: el PDF traducido tiene %d páginas y el original %d; DeepL pudo fusionar páginas al rehacer el diseño. Revisa el resultado.", n, pages))
 	}
 	os.RemoveAll(work)
 	return nil
@@ -391,7 +401,11 @@ func (d *DeepL) documentStatus(id, key, authKey string) (status string, secs int
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		return "", 0, "", fmt.Errorf("DeepL %d al consultar estado: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		e := fmt.Errorf("DeepL %d al consultar estado: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return "", 0, "", fmt.Errorf("%w: %v", errDocPermanent, e)
+		}
+		return "", 0, "", e
 	}
 	var r struct {
 		Status           string `json:"status"`

@@ -81,3 +81,19 @@ func TestBareTIFFRefusesCompressed(t *testing.T) {
 		t.Fatal("expected refusal of compressed TIFF")
 	}
 }
+
+// A tag Count under attacker control must be refused, never turned into a huge
+// allocation (the OOM the bug hunt found).
+func TestBareTIFFRejectsHugeCount(t *testing.T) {
+	b := tinyTIFF(2, 2, 1, 1, []byte{1, 2, 3, 4})
+	le := binary.LittleEndian
+	for i := int(le.Uint32(b[4:])) + 2; i+12 <= len(b); i += 12 {
+		if le.Uint16(b[i:]) == 273 { // StripOffsets: set an absurd Count
+			le.PutUint32(b[i+4:], 0xFFFFFFFF)
+		}
+	}
+	// must return an error, not OOM or panic
+	if _, err := bareTIFF(b); err == nil {
+		t.Fatal("expected refusal of an absurd tag count")
+	}
+}

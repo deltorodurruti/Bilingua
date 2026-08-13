@@ -37,6 +37,7 @@ func main() {
 	verbose := flag.Bool("verbose", false, "mostrar el avance con hora en cada paso")
 	quiet := flag.Bool("quiet", false, "no mostrar el avance, solo errores")
 	port := flag.Int("port", 8799, "puerto de la interfaz web")
+	ollama := flag.String("ollama", "", "modelo local de Ollama para cuando se agote la cuota de DeepL (ej: qwen2.5)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -49,9 +50,12 @@ func main() {
 	if k := strings.TrimSpace(os.Getenv("BILINGUA_DEEPL_KEY")); k != "" {
 		addKeys(splitKeys(k))
 	}
+	if *ollama != "" {
+		os.Setenv("BILINGUA_OLLAMA_MODEL", *ollama)
+	}
 	// Adding keys is a job of its own: without a PDF, save and report instead of
 	// opening the browser.
-	if len(key) > 0 && *in == "" && !*cli {
+	if len(key) > 0 && *in == "" {
 		stored := loadKeys()
 		fmt.Printf("✓ Guardada. Tienes %d clave(s) en %s\n", len(stored), keyPath())
 		if len(stored) > 1 {
@@ -76,10 +80,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%s es una carpeta; indica un PDF.\n", *in)
 			os.Exit(1)
 		}
-		if keys == "" {
+		if keys == "" && strings.TrimSpace(os.Getenv("BILINGUA_OLLAMA_MODEL")) == "" {
 			fmt.Fprintln(os.Stderr, "Falta la clave de DeepL.")
 			fmt.Fprintln(os.Stderr, "  Consíguela gratis en https://www.deepl.com/pro-api y pásala una vez con --key TU_CLAVE")
-			fmt.Fprintln(os.Stderr, "  (queda guardada en este equipo; las próximas veces no hace falta).")
+			fmt.Fprintln(os.Stderr, "  (o traduce con un modelo local: --ollama qwen2.5).")
 			os.Exit(1)
 		}
 		if *mode != "translation" && *mode != "bilingual" {
@@ -92,6 +96,10 @@ func main() {
 			o = strings.TrimSuffix(*in, ext) + " (traducido).pdf"
 		}
 		// Checked up front: finding out at the end costs the DeepL quota already spent.
+		if fi, err := os.Stat(o); err == nil && fi.IsDir() {
+			fmt.Fprintf(os.Stderr, "%s es una carpeta; indica un archivo .pdf de salida con --out.\n", o)
+			os.Exit(1)
+		}
 		if dir := filepath.Dir(o); dir != "" {
 			if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 				fmt.Fprintf(os.Stderr, "No puedo guardar en %s: la carpeta no existe.\n", dir)
@@ -189,6 +197,13 @@ Claves     Se piden una sola vez con --key y quedan guardadas en este equipo.
              bilingua --key PRIMERA:fx --key SEGUNDA:fx   (guarda las dos y sale)
            Se guardan en el archivo de abajo, una por línea; puedes editarlo.
            Gratis (500.000 caracteres/mes cada una) en https://www.deepl.com/pro-api
+
+Sin cuota   Cuando se agotan todas las claves puede seguir con un modelo LOCAL
+            (Ollama), gratis e ilimitado pero más lento y solo para libros de
+            texto (no escaneados):
+              ollama serve         (en otra terminal, una vez)
+              bilingua --in libro.pdf --key TU_CLAVE:fx --ollama qwen2.5
+            Traduce con DeepL hasta agotar la cuota y de ahí sigue con Ollama.
 
 Opciones
 `)

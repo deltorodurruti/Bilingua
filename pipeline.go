@@ -25,8 +25,8 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		paras = append(paras, ps...)
 	}
 
-	// Figures are read before deciding the route: a page with no text but a
-	// full-page image is a scan whose text would otherwise be dropped.
+	// Figures are read before deciding the route: image-only pages are placed
+	// as figures by the text route, so their images survive it.
 	figsByPage := ExtractFigures(inPath, log)
 
 	var totalChars, textPages, scannedPages int
@@ -50,19 +50,17 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		}
 	}
 
-	// The document endpoint runs OCR and keeps the layout, so it is the only
-	// route that covers scanned pages. Taking the text route while any page is
-	// a scan silently drops that page from the output.
-	if len(byPage) == 0 || scannedPages > 0 || len(unreadable) > 0 || textPages*2 < len(byPage) {
-		switch {
-		case len(unreadable) > 0:
-			log(fmt.Sprintf("%d páginas no se pudieron leer como texto (%s…): mando el libro entero al OCR de DeepL para no perderlas.",
-				len(unreadable), pageList(unreadable)))
-		case scannedPages > 0 && textPages > 0:
-			log(fmt.Sprintf("%d de %d páginas son imágenes escaneadas: mando el libro entero al OCR de DeepL para no perder ninguna.", scannedPages, len(byPage)))
-		case textPages > 0:
-			log(fmt.Sprintf("Solo %d de %d páginas traen texto: trato el libro como escaneado y lo mando entero al OCR de DeepL.", textPages, len(byPage)))
-		default:
+	// DeepL's document endpoint runs OCR but reflows the whole book and drops
+	// some of its images; over the per-document character ceiling it also splits
+	// the file and cuts a paragraph at the seam. So it is used ONLY for a genuine
+	// scan — where almost no page carries an extractable text layer. A few
+	// image-only pages in an otherwise-text book are plates or illustrations, not
+	// scanned text: the text route below places them as figures, keeping every
+	// image and adding no seam.
+	if len(byPage) == 0 || textPages*2 < len(byPage) {
+		if textPages > 0 {
+			log(fmt.Sprintf("Solo %d de %d páginas traen texto seleccionable: trato el libro como escaneado y lo mando al OCR de DeepL.", textPages, len(byPage)))
+		} else {
 			log("Este PDF parece escaneado (sin texto seleccionable). Lo traduzco con el OCR de DeepL, conservando el diseño…")
 		}
 		d := NewDeepL(key)
@@ -90,6 +88,15 @@ func TranslateBook(inPath, outPath, key, source, target, mode string, log func(s
 		return nil
 	}
 	log(fmt.Sprintf("Texto extraído: %d párrafos, ~%d caracteres.", len(paras), totalChars))
+	// The text route keeps every image (as a figure) and adds no seam. Only warn
+	// about pages that carried no readable text, so nothing thins out silently.
+	if len(unreadable) > 0 {
+		log(fmt.Sprintf("Aviso: %d páginas (%s…) no traían texto legible; si tenían texto escaneado, revísalas en el original.",
+			len(unreadable), pageList(unreadable)))
+	}
+	if scannedPages > 0 {
+		log(fmt.Sprintf("%d páginas son imágenes a página completa: las conservo como figuras (si alguna fuese texto escaneado, ese texto quedaría sin traducir; revísalas).", scannedPages))
+	}
 
 	d := NewDeepL(key)
 	d.log = log
